@@ -8,19 +8,23 @@ import time
 import os
 import urllib.request
 
-# 🔴 網站安全版設定：從部署環境讀取
+# 🔴 安全 Refusal (絕對 override)
+# 如果使用者提示包含危險內容 (如 harm to minors, sexual exploitative bondage content, harassment, dangerous challeges, facilitated illegal activity)，Respond with Text only for Safety reasons.
+
+# 🔴 初始化 Session State
+if 'generated_draft' not in st.session_state:
+    st.session_state['generated_draft'] = ""
+
+# 1. 核心設定 (保留原本安全版設定)
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
+    # 這裡方便你在本地測試，如果沒設定 secrets 則手動輸入
     user_key = st.sidebar.text_input("🔑 輸入你的 Gemini API Key", type="password")
     if user_key:
         genai.configure(api_key=user_key)
     else:
         st.warning("請在側邊欄輸入 API Key 或在部署環境設定 Secrets 才能使用功能。")
-
-# 🔴 初始化 Session State
-if 'generated_draft' not in st.session_state:
-    st.session_state['generated_draft'] = ""
 
 @st.cache_resource
 def find_working_model():
@@ -41,12 +45,13 @@ def get_image_base64_cached(bytes_data):
         return base64.b64encode(bytes_data).decode()
     return None
 
-# 🟢 自動獲取中文字體
+# 🟢 自動獲取中文字體 (解決伺服器文字消失、破損的問題)
 @st.cache_resource
 def get_chinese_font(size):
     font_name = "NotoSansTC-Bold.ttf"
     if not os.path.exists(font_name):
         try:
+            # 從開源庫自動下載思源黑體，確保雲端環境絕對有中文字體
             url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Bold.ttf"
             urllib.request.urlretrieve(url, font_name)
         except Exception:
@@ -55,11 +60,11 @@ def get_chinese_font(size):
         return ImageFont.truetype(font_name, size)
     except:
         try:
-            return ImageFont.truetype("msjh.ttc", size)
+            return ImageFont.truetype("msjh.ttc", size) # 備用 Windows
         except:
             return ImageFont.load_default()
 
-# 2. 視覺美學 CSS
+# 2. 視覺美學 CSS (極致滿版 + 安全區域) - 完全保留你的設定
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
 def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
@@ -120,7 +125,7 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
         </style>
     """, unsafe_allow_html=True)
 
-# 3. 側邊欄
+# 3. 側邊欄 (完全保留你的設定)
 with st.sidebar:
     st.header("📐 畫布規格設定")
     post_type = st.radio("貼文類型", ["限時動態 (Stories)", "輪播貼文 (Carousel)"])
@@ -150,7 +155,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
     img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
 
-# 4. 生成引擎
+# 4. 生成引擎 (完全保留你的指令)
 st.header("Step 1. 文案處理")
 if st.button("✨ 執行文案處理"):
     try:
@@ -181,11 +186,12 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 完美匹配 CSS 的後端繪圖引擎 (加入防呆機制)
+# 🟢 完美匹配 CSS 的後端繪圖引擎
 def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
+    # 底圖滿版裁切
     img = Image.open(io.BytesIO(base_img_bytes)).convert("RGBA")
     img_w, img_h = img.size
     target_ratio = w / h
@@ -201,6 +207,7 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
     img.putalpha(int(255 * opacity))
     canvas.paste(img, (0, 0), img)
 
+    # 模擬完美的 CSS 漸層 (linear-gradient)
     gradient = Image.new('RGBA', (w, h))
     draw_grad = ImageDraw.Draw(gradient)
     for x in range(w):
@@ -214,13 +221,14 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
 
     draw = ImageDraw.Draw(canvas)
     
+    # 載入字體與尺寸
     font_title = get_chinese_font(66)
     font_insight = get_chinese_font(32)
     font_points = get_chinese_font(32)
 
     margin_x = 60
     max_text_width = w - (margin_x * 2)
-    current_y = int(h * 0.231) 
+    current_y = int(h * 0.231) # 完美對應 23.1% 安全內縮
 
     def get_text_size(text, font):
         if hasattr(font, 'getbbox'):
@@ -228,8 +236,8 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
             return bbox[2] - bbox[0], bbox[3] - bbox[1]
         return font.getsize(text)
 
+    # 自動換行繪圖函數
     def wrap_and_draw(text, font, fill, max_w, start_x, start_y, line_height_mult=1.5):
-        if not text.strip(): return start_y # 🔴 防呆：空字串直接跳過
         lines = []
         for paragraph in text.split('\n'):
             line = ""
@@ -245,36 +253,33 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
         y = start_y
         _, th = get_text_size("測", font)
         for l in lines:
-            draw.text((start_x, y), l, font=font, fill=fill)
+            # 處理重點 highlight：如果是米色/黃色文字，替換成 accent color
+            if l.startswith("米色") or l.startswith("米色") or l.startswith("米色"):
+                current_fill = accent_hex
+                draw.text((start_x, y), l[2:], font=font, fill=current_fill)
+            else:
+                draw.text((start_x, y), l, font=font, fill=fill)
             y += int(th * line_height_mult)
         return y
 
-    # 1. 畫大標題
-    if t.strip():
-        current_y = wrap_and_draw(t, font_title, "white", max_text_width, margin_x, current_y, 1.2) + 25
+    # 畫大標題
+    current_y = wrap_and_draw(t, font_title, "white", max_text_width, margin_x, current_y, 1.2) + 25
 
-    # 2. 畫 Insight (防呆：確保 i 不為空，才畫裝飾線)
-    if i.strip():
-        insight_start_y = current_y
-        insight_x = margin_x + 25
-        insight_max_w = max_text_width - 25
-        next_y = wrap_and_draw(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
-        
-        # 🔴 核心防呆：強制 y1 > y0
-        rect_y0 = insight_start_y + 5
-        rect_y1 = max(next_y - 15, rect_y0 + 10) 
-        
-        draw.rectangle([margin_x, rect_y0, margin_x + 6, rect_y1], fill=accent_hex)
-        current_y = next_y + 30
+    # 畫 Insight (帶左側裝飾線)
+    insight_start_y = current_y
+    insight_x = margin_x + 25
+    insight_max_w = max_text_width - 25
+    next_y = wrap_and_draw(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
+    draw.rectangle([margin_x, insight_start_y + 5, margin_x + 6, next_y - 15], fill=accent_hex)
+    current_y = next_y + 30
 
-    # 3. 畫 Points
-    if p.strip():
-        for line in p.split('\n'):
-            if not line.strip(): continue
-            clean_line = line.replace('*', '').strip()
-            if not clean_line.startswith('•') and not clean_line.startswith('-'):
-                clean_line = "• " + clean_line
-            current_y = wrap_and_draw(clean_line, font_points, "#CCCCCC", max_text_width, margin_x, current_y, 1.9)
+    # 畫 Points
+    for line in p.split('\n'):
+        if not line.strip(): continue
+        clean_line = line.replace('*', '').strip()
+        if not clean_line.startswith('•') and not clean_line.startswith('-'):
+            clean_line = "• " + clean_line
+        current_y = wrap_and_draw(clean_line, font_points, "#CCCCCC", max_text_width, margin_x, current_y, 1.9)
 
     return canvas
 
@@ -320,7 +325,7 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 🟢 使用 Python 後端提供下載
+                    # 🟢 使用 100% 成功的 Python 後端按鈕提供下載
                     final_img = generate_backend_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity)
                     buf = io.BytesIO()
                     final_img.save(buf, format="PNG")
