@@ -6,7 +6,6 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import time
 import os
-import urllib.request
 
 # 🔴 網站安全版設定
 if "GOOGLE_API_KEY" in st.secrets:
@@ -40,19 +39,15 @@ def get_image_base64_cached(bytes_data):
         return base64.b64encode(bytes_data).decode()
     return None
 
-# 🟢 自動獲取中文字體
+# 🟢 直接讀取 GitHub 裡面的 font.ttf (絕對不會再有亂碼)
 @st.cache_resource
 def get_chinese_font(size):
-    font_name = "NotoSansTC-Bold.ttf"
-    if not os.path.exists(font_name):
-        try:
-            url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Bold.ttf"
-            urllib.request.urlretrieve(url, font_name)
-        except Exception:
-            pass
     try:
-        return ImageFont.truetype(font_name, size)
-    except:
+        # 直接讀取我們剛剛上傳到 GitHub 的字體檔
+        return ImageFont.truetype("font.ttf", size)
+    except Exception as e:
+        # 如果還是讀不到，在網頁上印出錯誤，讓我們知道原因
+        st.error(f"找不到 font.ttf，請確認檔案已上傳至 GitHub。錯誤碼：{e}")
         return ImageFont.load_default()
 
 # 2. 視覺美學 CSS
@@ -66,12 +61,9 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
         .stApp {{ background-color: #000000; }}
         [data-testid="stSidebar"] {{ background-color: #111111; border-right: 1px solid #333333; }}
         h1, h2, h3, p, span, label {{ color: #EAEAEA !important; font-family: 'PingFang TC', sans-serif; }}
-        
         .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; border: none; padding: 0.8rem 2rem; width: 100%; font-weight: bold; }}
-        
         #capture-area {{
-            width: 100%; max-width: 480px; margin: 0 auto;
-            aspect-ratio: {aspect_ratio_css};
+            width: 100%; max-width: 480px; margin: 0 auto; aspect-ratio: {aspect_ratio_css};
             position: relative; overflow: hidden; display: block; background-color: #000;
         }}
         .card-bg-image {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }}
@@ -94,10 +86,8 @@ with st.sidebar:
     st.header("📐 畫布規格設定")
     post_type = st.radio("貼文類型", ["限時動態 (Stories)", "輪播貼文 (Carousel)"])
     show_guides = st.checkbox("顯示 250px 安全邊界導引線", value=False)
-    
     aspect_ratio_css = "9 / 16" if post_type == "限時動態 (Stories)" else "4 / 5"
     safe_padding = "23.1%" 
-
     st.markdown("---")
     st.header("✍️ 內容模式")
     mode = st.radio("生成模式", ["AI 智能生成焦點", "直接貼上草稿"])
@@ -110,12 +100,10 @@ with st.sidebar:
 
     word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     tone = st.select_slider("語氣調性", options=["溫柔感性", "中性專業", "理性銳利"])
-
     st.markdown("---")
     st.header("🎨 視覺配色")
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
     inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides) 
-
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
     img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
 
@@ -139,12 +127,11 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗：{e}")
 
-# 🟢 無腦固定座標版：絕對不會報錯的壓圖函數
+# 🟢 無腦固定版：保證畫得出來的 Python 壓圖機
 def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
-    # 底圖滿版
     img = Image.open(io.BytesIO(base_img_bytes)).convert("RGBA")
     img_w, img_h = img.size
     target_ratio = w / h
@@ -160,7 +147,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
     img.putalpha(int(255 * opacity))
     canvas.paste(img, (0, 0), img)
 
-    # 固定漸層
     gradient = Image.new('RGBA', (w, h))
     draw_grad = ImageDraw.Draw(gradient)
     for x in range(w):
@@ -171,46 +157,42 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
 
     draw = ImageDraw.Draw(canvas)
     
+    # 讀取本地字體檔
     font_title = get_chinese_font(65)
     font_insight = get_chinese_font(34)
     font_points = get_chinese_font(34)
 
     margin_x = 80
-    
-    # 🔴 絕對固定座標邏輯 (不再計算高度)
-    # 1. 標題 (固定在 Y=250)
     current_y = int(h * 0.231)
-    title_chunks = [t[idx:idx+13] for idx in range(0, len(t), 13)] # 一行最多 13 字
-    for chunk in title_chunks[:2]: # 最多 2 行
+    
+    # 畫標題
+    title_chunks = [t[idx:idx+13] for idx in range(0, len(t), 13)] 
+    for chunk in title_chunks[:2]:
         draw.text((margin_x, current_y), chunk, font=font_title, fill="white")
         current_y += 85
     
-    # 2. 敘事 (固定接在標題下方 40px)
+    # 畫敘事
     current_y += 40
     insight_chunks = [i[idx:idx+23] for idx in range(0, len(i), 23)]
-    
-    # 強制畫框框：高度用行數直接相乘，絕對是正數！
     box_height = len(insight_chunks[:3]) * 55
     draw.rectangle([margin_x, current_y, margin_x + 6, current_y + box_height], fill=accent_hex)
-    
     text_y = current_y + 5
     for chunk in insight_chunks[:3]:
         draw.text((margin_x + 30, text_y), chunk, font=font_insight, fill="#BBBBBB")
         text_y += 55
     
-    # 3. 條列重點 (固定接在敘事下方 60px)
+    # 畫重點
     current_y += box_height + 60
     for line in p.split('\n'):
         if not line.strip(): continue
         clean_line = line.replace('*', '').strip()
         if not clean_line.startswith('•') and not clean_line.startswith('-'):
             clean_line = "• " + clean_line
-            
         point_chunks = [clean_line[idx:idx+23] for idx in range(0, len(clean_line), 23)]
         for chunk in point_chunks:
             draw.text((margin_x, current_y), chunk, font=font_points, fill="#CCCCCC")
             current_y += 55
-        current_y += 15 # 點與點之間的間距
+        current_y += 15
 
     return canvas
 
@@ -225,7 +207,7 @@ if st.button("🖼️ 生成滿版高品質畫布"):
     elif not final_text:
         st.warning("無內容。")
     else:
-        with st.spinner('正在渲染畫布與生成下載檔案...'):
+        with st.spinner('正在渲染畫布...'):
             try:
                 def extract(text, tag):
                     pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=(\n[\*]{{2,3}}|$))"
@@ -244,7 +226,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                 img_b64 = get_image_base64_cached(uploaded_file.getvalue())
                 
                 if img_b64:
-                    # 🟢 原汁原味保留 HTML 預覽
                     st.markdown(f"""
                     <div id="capture-area">
                         <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
@@ -256,7 +237,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 🟢 強制轉成圖片並下載
                     final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity)
                     buf = io.BytesIO()
                     final_img.save(buf, format="PNG")
