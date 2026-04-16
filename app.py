@@ -6,16 +6,15 @@ from PIL import Image
 import io
 import time
 
-# 🔴 網站安全版設定：從部署環境讀取
+# 🔴 網站安全版金鑰設定
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
-    # 這裡方便你在本地測試，如果沒設定 secrets 則手動輸入
     user_key = st.sidebar.text_input("🔑 輸入你的 Gemini API Key", type="password")
     if user_key:
         genai.configure(api_key=user_key)
     else:
-        st.warning("請在側邊欄輸入 API Key 或在部署環境設定 Secrets 才能使用功能。")
+        st.warning("請在側邊欄設定 Secrets 或輸入 API Key。")
 
 # 🔴 初始化 Session State
 if 'generated_draft' not in st.session_state:
@@ -40,12 +39,12 @@ def get_image_base64_cached(bytes_data):
         return base64.b64encode(bytes_data).decode()
     return None
 
-# 2. 視覺美學 CSS (極致滿版 + 安全區域)
+# 2. 視覺美學 CSS
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
-st.markdown('<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>', unsafe_allow_html=True)
 
 def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
     guide_style = "border: 2px dashed rgba(255, 0, 0, 0.6);" if show_guides else "border: none;"
+    canvas_border = "border: 2px solid rgba(255, 255, 255, 0.2);" if show_guides else "border: none;"
     
     st.markdown(f"""
         <style>
@@ -69,6 +68,7 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
             aspect-ratio: {aspect_ratio_css};
             position: relative; overflow: hidden;
             display: block; background-color: #000;
+            {canvas_border}
         }}
 
         .card-bg-image {{
@@ -139,38 +139,38 @@ if st.button("✨ 執行文案處理"):
         format_rule = """
         【格式死指令】：
         1. 標籤：***TITLE***, ***INSIGHT***, ***POINTS***。
-        2. ***INSIGHT*** 段落字數絕對不可超過 50 字。
+        2. ***INSIGHT*** 不超過 50 字。
         3. ***POINTS*** 格式：『* **小標**：內容描述』。
-        4. 除小標外，內文嚴禁標色。
+        4. 除小標外，內文嚴禁加星號標色。
         """
         if mode == "AI 智能生成焦點":
             if category == "全球當日總經整理":
                 persona = "專業首席分析師。"
-                topic = keywords if keywords else "全球經濟大事、台股表現與具體漲跌數據"
-                instruction = "必須提供明確數據（如 +1.2%, -180點）。禁止空談。"
+                topic = keywords if keywords else "全球重要經濟事件、台股表現及漲跌數據"
+                instruction = "必須提供明確數據（如 +0.6%, -186點）。禁止模糊詞彙。"
             else:
                 persona = "內容主編"
-                topic = keywords if keywords else "今日趨勢"
+                topic = keywords if keywords else "今日焦點"
                 instruction = "資訊具體明確。"
-            prompt = f"角色：{persona}。主題：{topic}。{instruction} {format_rule} 字數：{word_count}。"
+            prompt = f"角色：{persona}。主題：{topic}。{instruction} {format_rule} 語氣：{tone}。字數：{word_count}。"
         else:
-            prompt = f"優化以下草稿。{format_rule} 字數：{word_count}。\n草稿：{manual_raw}"
+            prompt = f"優化草稿。保留數據。{format_rule} 字數：{word_count}。\n內容：{manual_raw}"
         
-        with st.spinner('AI 分析數據中...'):
+        with st.spinner('AI 正在抓取數據...'):
             response = model.generate_content(prompt)
             st.session_state['generated_draft'] = response.text
             st.success("文案處理完畢！")
     except Exception as e:
-        st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
+        st.error(f"失敗：{e}")
 
 # 5. 渲染引擎
 st.markdown("---")
 st.header("Step 2. 合成畫布")
 final_text = st.text_area("編輯區", value=st.session_state['generated_draft'], height=300)
 
-if st.button("🖼️ 生成滿版高品質畫布"):
+if st.button("🖼️ 生成高品質滿版畫布"):
     if uploaded_file is None:
-        st.warning("請先上傳圖片。")
+        st.warning("請上傳圖片。")
     elif not final_text:
         st.warning("無內容。")
     else:
@@ -192,6 +192,7 @@ if st.button("🖼️ 生成滿版高品質畫布"):
 
                 img_b64 = get_image_base64_cached(uploaded_file.getvalue())
                 if img_b64:
+                    # 🔴 核心修復：將 JS 函式庫與執行邏輯封裝在一起
                     st.markdown(f"""
                     <div id="capture-area">
                         <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
@@ -201,18 +202,36 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                             <div class="canvas-points">{h_points}</div>
                         </div>
                     </div>
+                    
+                    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+                    
                     <script>
-                    function saveImage() {{
+                    async function saveImage() {{
                         const area = document.getElementById('capture-area');
-                        html2canvas(area, {{ scale: 3, useCORS: true, backgroundColor: "#000000" }}).then(canvas => {{
+                        // 稍微等待渲染穩定
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
+                        html2canvas(area, {{
+                            scale: 3,
+                            useCORS: true,
+                            allowTaint: true,
+                            backgroundColor: "#000000",
+                            logging: false
+                        }}).then(canvas => {{
                             const link = document.createElement('a');
-                            link.download = '質感滿版圖卡.png';
+                            link.download = 'IG_Card_{int(time.time())}.png';
                             link.href = canvas.toDataURL('image/png', 1.0);
+                            document.body.appendChild(link);
                             link.click();
+                            document.body.removeChild(link);
+                        }}).catch(err => {{
+                            console.error("下載出錯:", err);
+                            alert("下載失敗，請嘗試使用電腦瀏覽器 Chrome 執行。");
                         }});
                     }}
                     </script>
-                    <button onclick="saveImage()" class="download-btn">📸 保存高品質滿版圖卡 (PNG)</button>
+                    
+                    <button onclick="saveImage()" class="download-btn">📸 點擊這裡：保存高品質滿版圖卡 (PNG)</button>
                     """, unsafe_allow_html=True)
                 st.balloons()
             except Exception as e:
