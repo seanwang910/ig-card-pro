@@ -43,22 +43,21 @@ def get_image_base64_cached(bytes_data):
             return None
     return None
 
-# 🟢 直接讀取 GitHub 裡面的 font.ttf (絕對不會再有亂碼)
+# 🟢 直接讀取 GitHub 裡面的 font.ttf
 @st.cache_resource
 def get_chinese_font(size):
     try:
-        # 直接讀取上傳到 GitHub 的字體檔
-        return ImageFont.truetype("font.ttf", size)
+        return ImageFont.truetype("font.ttf", int(size))
     except Exception as e:
         try:
-            return ImageFont.truetype("msjh.ttc", size) # Windows 本地備用
+            return ImageFont.truetype("msjh.ttc", int(size))
         except:
             return ImageFont.load_default()
 
-# 2. 視覺美學 CSS
+# 2. 視覺美學 CSS (加入字體縮放參數)
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
-def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
+def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, font_scale):
     guide_style = "border: 2px dashed rgba(255, 0, 0, 0.6);" if show_guides else "border: none;"
     
     st.markdown(f"""
@@ -98,15 +97,16 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
             {guide_style}
         }}
 
-        .canvas-title {{ font-size: 2.2rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
+        /* 🟢 字體大小動態跟隨 font_scale 縮放 */
+        .canvas-title {{ font-size: {2.2 * font_scale}rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
         .canvas-title strong {{ color: {accent_color}; }}
         .canvas-insight {{ 
-            font-size: 1.05rem; margin-bottom: 30px; color: #BBBBBB; 
+            font-size: {1.05 * font_scale}rem; margin-bottom: 30px; color: #BBBBBB; 
             border-left: 5px solid {accent_color}; padding-left: 20px;
             font-weight: 400; font-style: italic; line-height: 1.6;
         }}
-        .canvas-points {{ font-size: 1.05rem; line-height: 1.9; color: #CCCCCC; }}
-        .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: 1.05rem; }}
+        .canvas-points {{ font-size: {1.05 * font_scale}rem; line-height: 1.9; color: #CCCCCC; }}
+        .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: {1.05 * font_scale}rem; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -133,9 +133,14 @@ with st.sidebar:
     tone = st.select_slider("語氣調性", options=["溫柔感性", "中性專業", "理性銳利"])
 
     st.markdown("---")
-    st.header("🎨 視覺配色")
+    st.header("🎨 視覺與排版微調")
+    
+    # 🟢 新增字體縮放滑桿
+    font_scale = st.slider("🔠 字體縮放比例", min_value=0.8, max_value=1.5, value=1.0, step=0.05)
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
-    inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides) 
+    
+    # 將 font_scale 傳入 CSS
+    inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, font_scale) 
 
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
     img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
@@ -171,12 +176,11 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 精準校正版：完美對齊網頁排版的 Python 壓圖機
-def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity):
+# 🟢 Python 壓圖機：支援字體縮放與小標變色
+def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
-    # 底圖滿版裁切
     img = Image.open(io.BytesIO(base_img_bytes)).convert("RGBA")
     img_w, img_h = img.size
     target_ratio = w / h
@@ -192,7 +196,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
     img.putalpha(int(255 * opacity))
     canvas.paste(img, (0, 0), img)
 
-    # 模擬 CSS 多段漸層背景
     gradient = Image.new('RGBA', (w, h))
     draw_grad = ImageDraw.Draw(gradient)
     for x in range(w):
@@ -206,14 +209,14 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
 
     draw = ImageDraw.Draw(canvas)
     
-    # 讀取本地字體檔，精細調整字體大小比例
-    font_title = get_chinese_font(72)    # 標題放大
-    font_insight = get_chinese_font(34)  # 敘事稍小
-    font_points = get_chinese_font(36)   # 內文標準
+    # 🟢 字體大小乘上 font_scale
+    font_title = get_chinese_font(72 * font_scale)    
+    font_insight = get_chinese_font(34 * font_scale)  
+    font_points = get_chinese_font(36 * font_scale)   
 
     margin_x = 80
-    max_text_width = w - (margin_x * 2) - 40 # 預留右側邊界
-    current_y = int(h * 0.231) # 23.1% 安全內縮
+    max_text_width = w - (margin_x * 2) - 40 
+    current_y = int(h * 0.231) 
 
     def get_text_size(text, font):
         try:
@@ -223,7 +226,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
         except: pass
         return len(text) * font.size, font.size
 
-    # 自動換行與繪圖函數
     def process_text(text, font, fill, max_w, start_x, start_y, line_height_mult=1.5, draw_mode=True):
         if not text or not text.strip(): return start_y
         lines = []
@@ -248,40 +250,60 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
             y += int(th * line_height_mult)
         return y
 
-    # --- 1. 畫標題 ---
+    # 1. 畫標題
     if t.strip():
         current_y = process_text(t, font_title, "white", max_text_width, margin_x, current_y, 1.3)
-        current_y += 45 # 標題與敘事的間距
+        current_y += int(45 * font_scale)
 
-    # --- 2. 畫 Insight 與精準裝飾線 ---
+    # 2. 畫 Insight
     if i.strip():
-        insight_x = margin_x + 30 # 文字往右推，留空間給裝飾線
+        insight_x = margin_x + 30 
         insight_max_w = max_text_width - 30
         
-        # 先「假畫」一次，測量這段文字會佔用多少高度
         predicted_end_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6, draw_mode=False)
-        box_height = max(predicted_end_y - current_y, 30) # 絕對防禦報錯機制
+        box_height = max(predicted_end_y - current_y, 30) 
         
-        # 畫裝飾線 (完美對齊文字頂端與底端)
         draw.rectangle([margin_x, current_y + 8, margin_x + 6, current_y + box_height - 15], fill=accent_hex)
-        
-        # 真正畫上文字
         current_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
-        current_y += 50 # 敘事與條列的間距
+        current_y += int(50 * font_scale)
 
-    # --- 3. 畫 Points 條列重點 ---
+    # 3. 畫 Points (🟢 雙色小標解析器)
     if p.strip():
+        _, th_p = get_text_size("國", font_points)
+        th_p = max(th_p, 30)
+        line_height = int(th_p * 1.7)
+        indent_w, _ = get_text_size("• ", font_points)
+
         for line in p.split('\n'):
             if not line.strip(): continue
             
-            # 清理 Markdown 星號，統一加上原點
-            clean_line = line.replace('*', '').strip()
-            if not clean_line.startswith('•') and not clean_line.startswith('-'):
+            clean_line = line.strip()
+            if clean_line.startswith('* '): clean_line = '• ' + clean_line[2:]
+            elif not clean_line.startswith('•') and not clean_line.startswith('-'):
                 clean_line = "• " + clean_line
             
-            # 畫內文，調整行距與字距
-            current_y = process_text(clean_line, font_points, "#EAEAEA", max_text_width, margin_x, current_y, 1.7)
-            current_y += 20 # 每個 bullet point 之間的間距
+            # 使用 ** 作為分隔符，基數區塊為小標 (需套用裝飾色)，偶數區塊為內文
+            parts = clean_line.split('**')
+            current_x = margin_x
+            
+            for index, part in enumerate(parts):
+                # 如果是被 ** 包圍的區段，顏色設為 accent_hex，否則為 #EAEAEA
+                color = accent_hex if index % 2 == 1 else "#EAEAEA"
+                
+                # 逐字繪製以處理自動換行
+                for char in part:
+                    cw, _ = get_text_size(char, font_points)
+                    
+                    # 檢查是否超出右側邊界，需換行
+                    if current_x + cw > margin_x + max_text_width:
+                        current_x = margin_x + indent_w # 換行後縮排，對齊圓點右側
+                        current_y += line_height
+                    
+                    draw.text((current_x, current_y), char, font=font_points, fill=color)
+                    current_x += cw
+            
+            # 每個 Point 結束後換行並增加段距
+            current_y += line_height + int(20 * font_scale) 
 
     return canvas
 
@@ -315,7 +337,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                 img_b64 = get_image_base64_cached(uploaded_file.getvalue())
                 
                 if img_b64:
-                    # 🟢 原汁原味保留 HTML 預覽
                     st.markdown(f"""
                     <div id="capture-area">
                         <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
@@ -327,8 +348,8 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 🟢 強制轉成圖片並下載
-                    final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity)
+                    # 🟢 將 font_scale 傳入後端繪圖引擎
+                    final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
                     buf = io.BytesIO()
                     final_img.save(buf, format="PNG")
                     
