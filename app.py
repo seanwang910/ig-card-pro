@@ -2,7 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 import re
 import base64
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import io
 import time
 import os
@@ -34,16 +34,23 @@ def find_working_model():
 
 model = find_working_model()
 
+# 🟢 修正手機上傳 EXIF 翻轉問題 (網頁預覽用)
 @st.cache_data
 def get_image_base64_cached(bytes_data):
     if bytes_data is not None:
         try:
-            return base64.b64encode(bytes_data).decode()
+            img = Image.open(io.BytesIO(bytes_data))
+            img = ImageOps.exif_transpose(img) # 自動轉正
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            return base64.b64encode(buf.getvalue()).decode()
         except Exception:
             return None
     return None
 
-# 🟢 直接讀取 GitHub 裡面的 font.ttf
+# 🟢 讀取本地中文字體
 @st.cache_resource
 def get_chinese_font(size):
     try:
@@ -54,7 +61,7 @@ def get_chinese_font(size):
         except:
             return ImageFont.load_default()
 
-# 2. 視覺美學 CSS (加入字體縮放參數)
+# 2. 視覺美學 CSS
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
 def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, font_scale):
@@ -97,7 +104,6 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, fon
             {guide_style}
         }}
 
-        /* 🟢 字體大小動態跟隨 font_scale 縮放 */
         .canvas-title {{ font-size: {2.2 * font_scale}rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
         .canvas-title strong {{ color: {accent_color}; }}
         .canvas-insight {{ 
@@ -135,11 +141,9 @@ with st.sidebar:
     st.markdown("---")
     st.header("🎨 視覺與排版微調")
     
-    # 🟢 新增字體縮放滑桿
     font_scale = st.slider("🔠 字體縮放比例", min_value=0.8, max_value=1.5, value=1.0, step=0.05)
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
     
-    # 將 font_scale 傳入 CSS
     inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, font_scale) 
 
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
@@ -176,12 +180,15 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 Python 壓圖機：支援字體縮放與小標變色
+# 🟢 Python 壓圖機
 def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
-    img = Image.open(io.BytesIO(base_img_bytes)).convert("RGBA")
+    # 🟢 修正手機上傳 EXIF 翻轉問題 (下載用)
+    img = Image.open(io.BytesIO(base_img_bytes))
+    img = ImageOps.exif_transpose(img).convert("RGBA")
+    
     img_w, img_h = img.size
     target_ratio = w / h
     if (img_w / img_h) > target_ratio:
@@ -209,7 +216,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
 
     draw = ImageDraw.Draw(canvas)
     
-    # 🟢 字體大小乘上 font_scale
     font_title = get_chinese_font(72 * font_scale)    
     font_insight = get_chinese_font(34 * font_scale)  
     font_points = get_chinese_font(36 * font_scale)   
@@ -267,7 +273,7 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
         current_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
         current_y += int(50 * font_scale)
 
-    # 3. 畫 Points (🟢 雙色小標解析器)
+    # 3. 畫 Points (雙色小標)
     if p.strip():
         _, th_p = get_text_size("國", font_points)
         th_p = max(th_p, 30)
@@ -282,27 +288,20 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
             elif not clean_line.startswith('•') and not clean_line.startswith('-'):
                 clean_line = "• " + clean_line
             
-            # 使用 ** 作為分隔符，基數區塊為小標 (需套用裝飾色)，偶數區塊為內文
             parts = clean_line.split('**')
             current_x = margin_x
             
             for index, part in enumerate(parts):
-                # 如果是被 ** 包圍的區段，顏色設為 accent_hex，否則為 #EAEAEA
                 color = accent_hex if index % 2 == 1 else "#EAEAEA"
-                
-                # 逐字繪製以處理自動換行
                 for char in part:
                     cw, _ = get_text_size(char, font_points)
-                    
-                    # 檢查是否超出右側邊界，需換行
                     if current_x + cw > margin_x + max_text_width:
-                        current_x = margin_x + indent_w # 換行後縮排，對齊圓點右側
+                        current_x = margin_x + indent_w
                         current_y += line_height
                     
                     draw.text((current_x, current_y), char, font=font_points, fill=color)
                     current_x += cw
             
-            # 每個 Point 結束後換行並增加段距
             current_y += line_height + int(20 * font_scale) 
 
     return canvas
@@ -348,7 +347,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 🟢 將 font_scale 傳入後端繪圖引擎
                     final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
                     buf = io.BytesIO()
                     final_img.save(buf, format="PNG")
