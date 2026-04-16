@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import time
 import os
-import urllib.request
+import requests # 新增：用來強制下載字體
 
 # 🔴 網站安全版設定：從部署環境讀取
 if "GOOGLE_API_KEY" in st.secrets:
@@ -41,25 +41,29 @@ def get_image_base64_cached(bytes_data):
         return base64.b64encode(bytes_data).decode()
     return None
 
-# 🟢 自動獲取中文字體與保護機制
+# 🟢 強制字體下載與防禦機制 (解決豆腐塊與閃退)
 @st.cache_resource
 def get_chinese_font(size):
-    font_name = "NotoSansTC-Bold.ttf"
-    if not os.path.exists(font_name):
+    font_path = "NotoSansTC-Bold.ttf"
+    # 如果雲端沒有這個字體，強制從 Google Fonts 下載
+    if not os.path.exists(font_path):
         try:
             url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Bold.ttf"
-            urllib.request.urlretrieve(url, font_name)
+            response = requests.get(url, stream=True, timeout=10)
+            if response.status_code == 200:
+                with open(font_path, 'wb') as f:
+                    f.write(response.content)
         except Exception:
             pass
     try:
-        return ImageFont.truetype(font_name, size)
+        return ImageFont.truetype(font_path, size)
     except:
         try:
-            return ImageFont.truetype("msjh.ttc", size)
+            return ImageFont.truetype("msjh.ttc", size) # Windows 本地端備用
         except:
             return ImageFont.load_default()
 
-# 2. 視覺美學 CSS (完整保留你的所有排版設定)
+# 2. 視覺美學 CSS (完整保留你的設定)
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
 def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
@@ -150,7 +154,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
     img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
 
-# 4. 生成引擎 (完整保留你的 AI 指令)
+# 4. 生成引擎 (完整保留)
 st.header("Step 1. 文案處理")
 if st.button("✨ 執行文案處理"):
     try:
@@ -181,7 +185,7 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 安全後端繪圖引擎 (修復座標報錯與字體問題)
+# 🟢 絕對防禦版的後端繪圖引擎
 def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
@@ -214,6 +218,7 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
 
     draw = ImageDraw.Draw(canvas)
     
+    # 這裡會觸發剛才的字體下載
     font_title = get_chinese_font(66)
     font_insight = get_chinese_font(32)
     font_points = get_chinese_font(32)
@@ -228,7 +233,7 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
                 bbox = font.getbbox(text)
                 if bbox: return bbox[2] - bbox[0], bbox[3] - bbox[1]
         except: pass
-        return 20, 20
+        return len(text) * 20, 30 # 絕對備用高度
 
     def wrap_and_draw(text, font, fill, max_w, start_x, start_y, line_height_mult=1.5):
         if not text or not text.strip(): return start_y
@@ -245,30 +250,30 @@ def generate_backend_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opac
             if line: lines.append(line)
         
         y = start_y
-        _, th = get_text_size("測試", font)
-        if th < 15: th = 30 # 🔴 絕對防呆：若字體載入失敗，強制給予高度，防止座標錯亂
+        _, th = get_text_size("國", font)
+        th = max(th, 30) # 🔴 強制最低高度，避免 0
         
         for l in lines:
             draw.text((start_x, y), l, font=font, fill=fill)
             y += int(th * line_height_mult)
-        return y
+        return max(y, start_y + 10)
 
     # 1. 畫標題
     if t.strip():
         current_y = wrap_and_draw(t, font_title, "white", max_text_width, margin_x, current_y, 1.2) + 25
 
-    # 2. 畫 Insight 與保護裝飾線
+    # 2. 畫 Insight
     if i.strip():
         insight_start_y = current_y
         insight_x = margin_x + 25
         insight_max_w = max_text_width - 25
         next_y = wrap_and_draw(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
         
-        # 🔴 核心修復：強制計算合法的矩形高度，絕不讓 y1 < y0
-        rect_y0 = int(insight_start_y + 5)
+        # 🔴 絕對防禦矩形報錯：y1 強制比 y0 大 50 以上
+        rect_y0 = int(insight_start_y)
         rect_y1 = int(next_y)
         if rect_y1 <= rect_y0:
-            rect_y1 = rect_y0 + 30 # 強制給予最低高度
+            rect_y1 = rect_y0 + 50 
             
         draw.rectangle([margin_x, rect_y0, margin_x + 6, rect_y1], fill=accent_hex)
         current_y = rect_y1 + 30
@@ -295,7 +300,7 @@ if st.button("🖼️ 生成滿版高品質畫布"):
     elif not final_text:
         st.warning("無內容。")
     else:
-        with st.spinner('正在渲染滿版畫布...'):
+        with st.spinner('正在載入字體與渲染畫布 (第一次可能需要 3-5 秒下載字體)...'):
             try:
                 def extract(text, tag):
                     pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=(\n[\*]{{2,3}}|$))"
@@ -314,7 +319,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                 img_b64 = get_image_base64_cached(uploaded_file.getvalue())
                 
                 if img_b64:
-                    # 🟢 原汁原味保留 HTML/CSS 精美預覽
                     st.markdown(f"""
                     <div id="capture-area">
                         <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
@@ -326,7 +330,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 🟢 使用 Python 後端提供絕對成功的下載
                     final_img = generate_backend_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity)
                     buf = io.BytesIO()
                     final_img.save(buf, format="PNG")
