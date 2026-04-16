@@ -58,9 +58,10 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
         }}
         
         .download-btn {{
-            background-color: #333; color: {accent_color}; border: 1px solid {accent_color};
-            padding: 12px 20px; border-radius: 10px; cursor: pointer;
-            margin-top: 20px; font-weight: bold; width: 100%; text-align: center;
+            background-color: {accent_color}; color: white;
+            padding: 15px 20px; border-radius: 12px; cursor: pointer;
+            margin: 20px auto; font-weight: bold; width: 100%; text-align: center;
+            border: none; display: block; font-size: 1.1rem;
         }}
 
         #capture-area {{
@@ -99,6 +100,9 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides):
         }}
         .canvas-points {{ font-size: 1.05rem; line-height: 1.9; color: #CCCCCC; }}
         .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: 1.05rem; }}
+        
+        /* 隱藏截圖後產生的臨時圖片預覽，直到點擊按鈕 */
+        #final-output-img {{ width: 100%; max-width: 480px; margin: 20px auto; display: none; border: 3px solid {accent_color}; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -137,102 +141,68 @@ st.header("Step 1. 文案處理")
 if st.button("✨ 執行文案處理"):
     try:
         format_rule = """
-        【格式死指令】：
-        1. 標籤：***TITLE***, ***INSIGHT***, ***POINTS***。
-        2. ***INSIGHT*** 不超過 50 字。
-        3. ***POINTS*** 格式：『* **小標**：內容描述』。
-        4. 除小標外，內文嚴禁加星號標色。
+        【格式死指令】：標籤使用 ***TITLE***, ***INSIGHT***, ***POINTS***。POINTS 格式為 * **小標**：內容。
         """
         if mode == "AI 智能生成焦點":
-            if category == "全球當日總經整理":
-                persona = "專業首席分析師。"
-                topic = keywords if keywords else "全球重要經濟事件、台股表現及漲跌數據"
-                instruction = "必須提供明確數據（如 +0.6%, -186點）。禁止模糊詞彙。"
-            else:
-                persona = "內容主編"
-                topic = keywords if keywords else "今日焦點"
-                instruction = "資訊具體明確。"
-            prompt = f"角色：{persona}。主題：{topic}。{instruction} {format_rule} 語氣：{tone}。字數：{word_count}。"
+            persona = "專業分析師" if category == "全球當日總經整理" else "主編"
+            prompt = f"角色：{persona}。主題：{keywords if keywords else category}。{format_rule} 字數：{word_count}。"
         else:
-            prompt = f"優化草稿。保留數據。{format_rule} 字數：{word_count}。\n內容：{manual_raw}"
+            prompt = f"優化草稿：{manual_raw}。{format_rule}"
         
-        with st.spinner('AI 正在抓取數據...'):
+        with st.spinner('AI 正在分析...'):
             response = model.generate_content(prompt)
             st.session_state['generated_draft'] = response.text
-            st.success("文案處理完畢！")
     except Exception as e:
         st.error(f"失敗：{e}")
 
 # 5. 渲染引擎
 st.markdown("---")
 st.header("Step 2. 合成畫布")
-final_text = st.text_area("編輯區", value=st.session_state['generated_draft'], height=300)
+final_text = st.text_area("編輯文案", value=st.session_state['generated_draft'], height=200)
 
-if st.button("🖼️ 生成高品質滿版畫布"):
-    if uploaded_file is None:
-        st.warning("請上傳圖片。")
-    elif not final_text:
-        st.warning("無內容。")
-    else:
-        with st.spinner('正在渲染滿版畫布...'):
-            try:
-                def extract(text, tag):
-                    pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=(\n[\*]{{2,3}}|$))"
-                    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                    return match.group(1).strip().lstrip(':').lstrip('：').strip() if match else ""
+if uploaded_file and final_text:
+    try:
+        def extract(text, tag):
+            pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=(\n[\*]{{2,3}}|$))"
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            return match.group(1).strip().lstrip(':').lstrip('：').strip() if match else ""
 
-                t, i, p = extract(final_text, "TITLE"), extract(final_text, "INSIGHT"), extract(final_text, "POINTS")
-                if not t:
-                    t_match = re.search(r"^\*\*(.*?)\*\*", final_text)
-                    if t_match: t = t_match.group(1)
+        t, i, p = extract(final_text, "TITLE"), extract(final_text, "INSIGHT"), extract(final_text, "POINTS")
+        h_title = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', t)
+        h_insight = i.replace("**", "") 
+        h_points = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', p).replace('\n', '<br>')
+        img_b64 = get_image_base64_cached(uploaded_file.getvalue())
 
-                h_title = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', t)
-                h_insight = i.replace("**", "") 
-                h_points = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', p).replace('\n', '<br>')
-
-                img_b64 = get_image_base64_cached(uploaded_file.getvalue())
-                if img_b64:
-                    # 🔴 核心修復：將 JS 函式庫與執行邏輯封裝在一起
-                    st.markdown(f"""
-                    <div id="capture-area">
-                        <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
-                        <div class="card-text-overlay">
-                            <div class="canvas-title">{h_title}</div>
-                            <div class="canvas-insight">{h_insight}</div>
-                            <div class="canvas-points">{h_points}</div>
-                        </div>
-                    </div>
-                    
-                    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
-                    
-                    <script>
-                    async function saveImage() {{
-                        const area = document.getElementById('capture-area');
-                        // 稍微等待渲染穩定
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                        
-                        html2canvas(area, {{
-                            scale: 3,
-                            useCORS: true,
-                            allowTaint: true,
-                            backgroundColor: "#000000",
-                            logging: false
-                        }}).then(canvas => {{
-                            const link = document.createElement('a');
-                            link.download = 'IG_Card_{int(time.time())}.png';
-                            link.href = canvas.toDataURL('image/png', 1.0);
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                        }}).catch(err => {{
-                            console.error("下載出錯:", err);
-                            alert("下載失敗，請嘗試使用電腦瀏覽器 Chrome 執行。");
-                        }});
-                    }}
-                    </script>
-                    
-                    <button onclick="saveImage()" class="download-btn">📸 點擊這裡：保存高品質滿版圖卡 (PNG)</button>
-                    """, unsafe_allow_html=True)
-                st.balloons()
-            except Exception as e:
-                st.error(f"渲染失敗：{e}")
+        if img_b64:
+            st.markdown(f"""
+            <div id="capture-area">
+                <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
+                <div class="card-text-overlay">
+                    <div class="canvas-title">{h_title}</div>
+                    <div class="canvas-insight">{h_insight}</div>
+                    <div class="canvas-points">{h_points}</div>
+                </div>
+            </div>
+            
+            <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+            <script>
+            function convertToImage() {{
+                const area = document.getElementById('capture-area');
+                html2canvas(area, {{ scale: 3, useCORS: true, backgroundColor: "#000000" }}).then(canvas => {{
+                    const imgData = canvas.toDataURL('image/png');
+                    const outputImg = document.getElementById('final-output-img');
+                    outputImg.src = imgData;
+                    outputImg.style.display = 'block';
+                    area.style.display = 'none';
+                    alert("✅ 圖片已轉換完成！\\n\\n手機：請長按下方圖片選擇『儲存圖片』\\n電腦：右鍵點擊圖片選擇『另存圖片』");
+                }});
+            }}
+            </script>
+            
+            <button onclick="convertToImage()" class="download-btn">📸 點此轉換為可下載圖片</button>
+            
+            <img id="final-output-img" />
+            """, unsafe_allow_html=True)
+            st.info("💡 點擊上方按鈕後，圖片會變更為可儲存格式，接著長按即可儲存。")
+    except Exception as e:
+        st.error(f"渲染出錯：{e}")
