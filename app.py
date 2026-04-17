@@ -7,7 +7,7 @@ import io
 import time
 import os
 
-# 🔴 網站安全版設定：從部署環境讀取
+# 🔴 網站安全版設定
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
@@ -17,7 +17,6 @@ else:
     else:
         st.warning("請在側邊欄輸入 API Key 或在部署環境設定 Secrets 才能使用功能。")
 
-# 🔴 初始化 Session State
 if 'generated_draft' not in st.session_state:
     st.session_state['generated_draft'] = ""
 
@@ -34,13 +33,13 @@ def find_working_model():
 
 model = find_working_model()
 
-# 🟢 修正手機上傳 EXIF 翻轉問題 (網頁預覽用)
+# 🟢 修正手機上傳 EXIF 翻轉問題 (確保預覽不會歪掉)
 @st.cache_data
 def get_image_base64_cached(bytes_data):
     if bytes_data is not None:
         try:
             img = Image.open(io.BytesIO(bytes_data))
-            img = ImageOps.exif_transpose(img) # 自動轉正
+            img = ImageOps.exif_transpose(img) 
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             buf = io.BytesIO()
@@ -72,45 +71,13 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, fon
         .stApp {{ background-color: #000000; }}
         [data-testid="stSidebar"] {{ background-color: #111111; border-right: 1px solid #333333; }}
         h1, h2, h3, p, span, label {{ color: #EAEAEA !important; font-family: 'PingFang TC', sans-serif; }}
-        
-        .stButton>button {{ 
-            background-color: {accent_color}; color: white; border-radius: 8px; border: none; 
-            padding: 0.8rem 2rem; width: 100%; font-weight: bold;
-        }}
-        
-        #capture-area {{
-            width: 100%; max-width: 480px; margin: 0 auto;
-            aspect-ratio: {aspect_ratio_css};
-            position: relative; overflow: hidden;
-            display: block; background-color: #000;
-        }}
-
-        .card-bg-image {{
-            position: absolute; inset: 0;
-            width: 100%; height: 100%;
-            object-fit: cover; z-index: 1;
-        }}
-
-        .card-text-overlay {{
-            position: absolute; inset: 0;
-            z-index: 2;
-            width: 100%; height: 100%;
-            background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.6) 60%, rgba(0,0,0,0.2) 100%);
-            padding: {safe_padding} 60px; 
-            box-sizing: border-box;
-            display: flex; flex-direction: column;
-            justify-content: center; align-items: flex-start;
-            text-align: left; color: #FFFFFF;
-            {guide_style}
-        }}
-
+        .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; border: none; padding: 0.8rem 2rem; width: 100%; font-weight: bold; }}
+        #capture-area {{ width: 100%; max-width: 480px; margin: 0 auto; aspect-ratio: {aspect_ratio_css}; position: relative; overflow: hidden; display: block; background-color: #000; }}
+        .card-bg-image {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }}
+        .card-text-overlay {{ position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.6) 60%, rgba(0,0,0,0.2) 100%); padding: {safe_padding} 60px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; text-align: left; color: #FFFFFF; {guide_style} }}
         .canvas-title {{ font-size: {2.2 * font_scale}rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
         .canvas-title strong {{ color: {accent_color}; }}
-        .canvas-insight {{ 
-            font-size: {1.05 * font_scale}rem; margin-bottom: 30px; color: #BBBBBB; 
-            border-left: 5px solid {accent_color}; padding-left: 20px;
-            font-weight: 400; font-style: italic; line-height: 1.6;
-        }}
+        .canvas-insight {{ font-size: {1.05 * font_scale}rem; margin-bottom: 30px; color: #BBBBBB; border-left: 5px solid {accent_color}; padding-left: 20px; font-weight: 400; font-style: italic; line-height: 1.6; }}
         .canvas-points {{ font-size: {1.05 * font_scale}rem; line-height: 1.9; color: #CCCCCC; }}
         .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: {1.05 * font_scale}rem; }}
         </style>
@@ -121,10 +88,8 @@ with st.sidebar:
     st.header("📐 畫布規格設定")
     post_type = st.radio("貼文類型", ["限時動態 (Stories)", "輪播貼文 (Carousel)"])
     show_guides = st.checkbox("顯示 250px 安全邊界導引線", value=False)
-    
     aspect_ratio_css = "9 / 16" if post_type == "限時動態 (Stories)" else "4 / 5"
     safe_padding = "23.1%" 
-
     st.markdown("---")
     st.header("✍️ 內容模式")
     mode = st.radio("生成模式", ["AI 智能生成焦點", "直接貼上草稿"])
@@ -140,7 +105,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("🎨 視覺與排版微調")
-    
     font_scale = st.slider("🔠 字體縮放比例", min_value=0.8, max_value=1.5, value=1.0, step=0.05)
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
     
@@ -185,7 +149,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
-    # 🟢 修正手機上傳 EXIF 翻轉問題 (下載用)
     img = Image.open(io.BytesIO(base_img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGBA")
     
@@ -215,7 +178,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
     canvas = Image.alpha_composite(canvas, gradient)
 
     draw = ImageDraw.Draw(canvas)
-    
     font_title = get_chinese_font(72 * font_scale)    
     font_insight = get_chinese_font(34 * font_scale)  
     font_points = get_chinese_font(36 * font_scale)   
@@ -256,24 +218,19 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
             y += int(th * line_height_mult)
         return y
 
-    # 1. 畫標題
     if t.strip():
         current_y = process_text(t, font_title, "white", max_text_width, margin_x, current_y, 1.3)
         current_y += int(45 * font_scale)
 
-    # 2. 畫 Insight
     if i.strip():
         insight_x = margin_x + 30 
         insight_max_w = max_text_width - 30
-        
         predicted_end_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6, draw_mode=False)
         box_height = max(predicted_end_y - current_y, 30) 
-        
         draw.rectangle([margin_x, current_y + 8, margin_x + 6, current_y + box_height - 15], fill=accent_hex)
         current_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
         current_y += int(50 * font_scale)
 
-    # 3. 畫 Points (雙色小標)
     if p.strip():
         _, th_p = get_text_size("國", font_points)
         th_p = max(th_p, 30)
@@ -282,7 +239,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
 
         for line in p.split('\n'):
             if not line.strip(): continue
-            
             clean_line = line.strip()
             if clean_line.startswith('* '): clean_line = '• ' + clean_line[2:]
             elif not clean_line.startswith('•') and not clean_line.startswith('-'):
@@ -298,7 +254,6 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
                     if current_x + cw > margin_x + max_text_width:
                         current_x = margin_x + indent_w
                         current_y += line_height
-                    
                     draw.text((current_x, current_y), char, font=font_points, fill=color)
                     current_x += cw
             
@@ -333,32 +288,27 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                 h_insight = i.replace("**", "") 
                 h_points = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', p).replace('\n', '<br>')
 
-                img_b64 = get_image_base64_cached(uploaded_file.getvalue())
+                # 🟢 產生最終真正的圖片檔案
+                final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
                 
-                if img_b64:
-                    st.markdown(f"""
-                    <div id="capture-area">
-                        <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
-                        <div class="card-text-overlay">
-                            <div class="canvas-title">{h_title}</div>
-                            <div class="canvas-insight">{h_insight}</div>
-                            <div class="canvas-points">{h_points}</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
-                    buf = io.BytesIO()
-                    final_img.save(buf, format="PNG")
-                    
-                    st.download_button(
-                        label="📸 點擊下載：高品質滿版圖卡 (PNG)",
-                        data=buf.getvalue(),
-                        file_name=f"IG_Card_{int(time.time())}.png",
-                        mime="image/png",
-                        use_container_width=True
-                    )
-                    st.balloons()
+                # 🟢 直接在網頁上印出「真正的」圖片 (支援手機原生長按儲存)
+                st.success("✅ 圖片生成成功！")
+                st.info("📱 **手機用戶請注意：如果你是從 LINE 或 FB 點開，請直接對下方圖片「長按」並選擇「儲存圖片」即可！**")
+                
+                st.image(final_img, caption="長按上方圖片儲存", use_container_width=True)
+                
+                # 準備下載用的檔案 (給電腦端用戶)
+                buf = io.BytesIO()
+                final_img.save(buf, format="PNG")
+                
+                st.download_button(
+                    label="💻 電腦端點擊下載：高品質圖卡 (PNG)",
+                    data=buf.getvalue(),
+                    file_name=f"IG_Card_{int(time.time())}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+                st.balloons()
 
             except Exception as e:
                 st.error(f"渲染失敗：{e}")
