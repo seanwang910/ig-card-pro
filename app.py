@@ -32,6 +32,22 @@ def find_working_model():
 
 model = find_working_model()
 
+# 🟢 修正手機上傳 EXIF 翻轉問題 (第一版核心穩定功能)
+@st.cache_data
+def get_image_base64_cached(bytes_data):
+    if bytes_data is not None:
+        try:
+            img = Image.open(io.BytesIO(bytes_data))
+            img = ImageOps.exif_transpose(img) 
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            return base64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            return None
+    return None
+
 # 🟢 讀取本地中文字體
 @st.cache_resource
 def get_chinese_font(size):
@@ -46,16 +62,21 @@ def get_chinese_font(size):
 # 2. 視覺美學 CSS
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
-def inject_ui_css(accent_color):
+def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, font_scale):
     st.markdown(f"""
         <style>
         .stApp {{ background-color: #000000; }}
         [data-testid="stSidebar"] {{ background-color: #111111; border-right: 1px solid #333333; }}
         h1, h2, h3, p, span, label {{ color: #EAEAEA !important; font-family: 'PingFang TC', sans-serif; }}
-        .stButton>button {{ 
-            background-color: {accent_color}; color: white; border-radius: 8px; border: none; 
-            padding: 0.8rem 2rem; width: 100%; font-weight: bold; 
-        }}
+        .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; border: none; padding: 0.8rem 2rem; width: 100%; font-weight: bold; }}
+        #capture-area {{ width: 100%; max-width: 480px; margin: 0 auto; aspect-ratio: {aspect_ratio_css}; position: relative; overflow: hidden; display: block; background-color: #000; }}
+        .card-bg-image {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }}
+        .card-text-overlay {{ position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.6) 60%, rgba(0,0,0,0.2) 100%); padding: {safe_padding} 60px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; text-align: left; color: #FFFFFF; }}
+        .canvas-title {{ font-size: {2.2 * font_scale}rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
+        .canvas-title strong {{ color: {accent_color}; }}
+        .canvas-insight {{ font-size: {1.05 * font_scale}rem; margin-bottom: 30px; color: #BBBBBB; border-left: 5px solid {accent_color}; padding-left: 20px; font-weight: 400; font-style: italic; line-height: 1.6; }}
+        .canvas-points {{ font-size: {1.05 * font_scale}rem; line-height: 1.9; color: #CCCCCC; }}
+        .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: {1.05 * font_scale}rem; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -63,6 +84,8 @@ def inject_ui_css(accent_color):
 with st.sidebar:
     st.header("📐 畫布規格設定")
     post_type = st.radio("貼文類型", ["限時動態 (Stories)", "輪播貼文 (Carousel)"])
+    aspect_ratio_css = "9 / 16" if post_type == "限時動態 (Stories)" else "4 / 5"
+    safe_padding = "23.1%" 
     
     st.markdown("---")
     st.header("✍️ 內容模式")
@@ -71,11 +94,16 @@ with st.sidebar:
     if mode == "AI 智能生成焦點":
         category = st.selectbox("主題類別", ["全球當日總經整理", "財商思維", "自我成長"])
         keywords = st.text_input("關鍵字 (可留空)", "")
+        word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     else:
-        manual_raw = st.text_area("🔴 貼入原始內容：", height=150)
-        st.caption("📱 **手機換頁技巧**：若想手動換頁，請在行首獨立輸入三個減號 `---`")
+        # 🟢 在「直接貼上草稿」模式下：隱藏字數，新增分頁選擇
+        manual_raw = st.text_area("🔴 貼入原始草稿：", height=200)
+        draft_pagination_mode = st.radio("📜 分頁處理方式", [
+            "🧠 AI 幫我自動分頁", 
+            "✍️ 手動分頁 (保留我的 --- 或 ***PAGE_BREAK*** 標記)"
+        ])
+        st.caption("提示：手動分頁只需在欲換頁的段落之間，獨立打上三個減號 `---` 即可。")
 
-    word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     tone = st.select_slider("語氣調性", options=["溫柔感性", "中性專業", "理性銳利"])
 
     st.markdown("---")
@@ -83,45 +111,46 @@ with st.sidebar:
     font_scale = st.slider("🔠 字體縮放比例", min_value=0.8, max_value=1.5, value=1.0, step=0.05)
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
     
-    inject_ui_css(accent_color) 
+    inject_ui_css(accent_color, aspect_ratio_css, safe_padding, font_scale) 
 
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
-    img_opacity = st.slider("底圖透明度", 0.0, 1.0, 0.75, step=0.05)
+    img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
 
 # 4. 生成引擎
 st.header("Step 1. 文案處理")
 if st.button("✨ 執行文案處理"):
     try:
-        # 🟢 強化的 AI 自動分頁指令
-        format_rule = """
+        format_base = """
         【格式死指令】：
         1. 標籤：***TITLE***, ***INSIGHT***, ***POINTS***。
-        2. ***INSIGHT*** 段落字數絕對不可超過 50 字。
+        2. ***INSIGHT*** 段落絕對不可超過 50 字。
         3. ***POINTS*** 格式：『* **小標**：內容描述』。
         4. 除小標外，內文嚴禁標色。
-        5. 【AI 自動分頁】：若重點超過 4 個，請務必在段落之間插入獨立一行的 `---` 來進行分頁。每一頁保持 3 到 4 個重點為佳。
         """
+
         if mode == "AI 智能生成焦點":
-            if category == "全球當日總經整理":
-                persona = "專業首席分析師。"
-                topic = keywords if keywords else "全球經濟大事、台股表現與具體漲跌數據"
-                instruction = "必須提供明確數據（如 +1.2%, -180點）。禁止空談。"
-            else:
-                persona = "內容主編"
-                topic = keywords if keywords else "今日趨勢"
-                instruction = "資訊具體明確。"
-            prompt = f"角色：{persona}。主題：{topic}。{instruction} {format_rule} 字數：{word_count}。"
+            persona = "專業首席分析師。" if category == "全球當日總經整理" else "內容主編"
+            topic = keywords if keywords else "今日趨勢"
+            instruction = "必須提供明確數據，禁止空談。" if category == "全球當日總經整理" else "資訊具體明確。"
+            pagination_rule = "5. 【分頁規定】：若重點超過 4 個，請務必在合適的段落之間插入獨立一行的 `---` 標籤來分頁。"
+            prompt = f"角色：{persona}。主題：{topic}。{instruction} {format_base} {pagination_rule} 字數大約：{word_count}。"
         else:
-            prompt = f"優化以下草稿。{format_rule} 字數：{word_count}。\n草稿：{manual_raw}"
+            # 🟢 依據使用者的分頁選擇，給予 AI 不同的指令
+            if "手動分頁" in draft_pagination_mode:
+                pagination_rule = "5. 【分頁規定】：使用者草稿中已自行設定了 `---` 或 `***PAGE_BREAK***` 作為換頁標記。請你在優化排版時，【絕對保留】這些標記的位置，不要擅自增加或刪除換頁。"
+            else:
+                pagination_rule = "5. 【分頁規定】：請根據草稿資訊量，在適合的重點段落之間插入獨立一行的 `---` 幫使用者進行分頁，建議每頁維持 3 到 4 個重點。"
+            
+            prompt = f"優化以下草稿。{format_base} {pagination_rule}。請保持草稿的原始含義。\n草稿：{manual_raw}"
         
-        with st.spinner('AI 正在思考排版與分頁...'):
+        with st.spinner('AI 分析與排版處理中...'):
             response = model.generate_content(prompt)
             st.session_state['generated_draft'] = response.text
-            st.success("文案處理完畢！已為您自動安排最佳分頁。")
+            st.success("文案處理完畢！")
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 智慧多圖輪播引擎 (支援 `---` 與自動溢出保護)
+# 🟢 第一版核心：無腦穩定繪圖引擎 (支援多圖與長按存圖)
 def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
@@ -223,7 +252,7 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         for line in p.split('\n'):
             if not line.strip(): continue
             
-            # 🟢 判斷是否需要換頁：支援 AI 的 --- 或是舊的 PAGE_BREAK
+            # 🟢 分頁判定點：支援 --- 以及 PAGE_BREAK
             if line.strip().startswith('---') or 'PAGE_BREAK' in line.upper():
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
@@ -250,7 +279,6 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             
             estimated_point_height = (lines_needed * line_height) + int(20 * font_scale)
             
-            # 高度防禦保護：如果這個重點畫不下了，系統自動切下一頁！
             if current_y + estimated_point_height > page_bottom_limit:
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
