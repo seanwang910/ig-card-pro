@@ -48,7 +48,7 @@ def get_image_base64_cached(bytes_data):
             return None
     return None
 
-# 🟢 讀取本地中文字體 (保持第一版最穩定的做法)
+# 🟢 讀取本地中文字體
 @st.cache_resource
 def get_chinese_font(size):
     try:
@@ -145,12 +145,11 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 智慧多圖輪播引擎 (支援 A:標籤換頁 + B:高度溢出自動換頁)
+# 🟢 智慧多圖輪播引擎
 def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
-    # 處理底圖 (所有頁面共用)
     img = Image.open(io.BytesIO(base_img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGBA")
     img_w, img_h = img.size
@@ -178,11 +177,10 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         draw_grad.line([(x, 0), (x, h)], fill=(0, 0, 0, int(255 * alpha_pct)))
     base_canvas = Image.alpha_composite(base_canvas, gradient)
 
-    # 字體設定
     font_title = get_chinese_font(72 * font_scale)    
     font_insight = get_chinese_font(34 * font_scale)  
     font_points = get_chinese_font(36 * font_scale)   
-    font_page = get_chinese_font(28 * font_scale) # 頁碼字體
+    font_page = get_chinese_font(28 * font_scale)
 
     margin_x = 80
     max_text_width = w - (margin_x * 2) - 40 
@@ -224,10 +222,9 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
     draw = ImageDraw.Draw(current_canvas)
     
     current_y = int(h * 0.231) 
-    page_bottom_limit = h - int(150 * font_scale) # 底部保留 150px 空間
-    top_margin_subsequent = int(h * 0.15) # 第2頁之後，文字從 15% 的高度開始
+    page_bottom_limit = h - int(150 * font_scale) 
+    top_margin_subsequent = int(h * 0.15) 
 
-    # --- 第 1 頁：畫標題與前言 ---
     if t.strip():
         current_y = process_text(draw, t, font_title, "white", max_text_width, margin_x, current_y, 1.3)
         current_y += int(45 * font_scale)
@@ -241,7 +238,6 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         current_y = process_text(draw, i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
         current_y += int(50 * font_scale)
 
-    # --- 畫重點 (支援智能與自動分頁) ---
     if p.strip():
         _, th_p = get_text_size("國", font_points)
         th_p = max(th_p, 30)
@@ -251,12 +247,12 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         for line in p.split('\n'):
             if not line.strip(): continue
             
-            # 【作法 A】遇到 AI 或手動輸入的換頁標籤
-            if '***PAGE_BREAK***' in line.upper():
-                pages.append(current_canvas) # 儲存當前頁
-                current_canvas = base_canvas.copy() # 開新畫布
+            # 🟢 修正：更寬容的換頁偵測
+            if 'PAGE_BREAK' in line.upper():
+                pages.append(current_canvas)
+                current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
-                current_y = top_margin_subsequent # 新一頁從上方開始
+                current_y = top_margin_subsequent 
                 continue
 
             clean_line = line.strip()
@@ -264,7 +260,6 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             elif not clean_line.startswith('•') and not clean_line.startswith('-'):
                 clean_line = "• " + clean_line
             
-            # 【作法 B】空間預先測量 (自動分頁防禦)
             temp_x = margin_x
             lines_needed = 0
             parts = clean_line.split('**')
@@ -275,18 +270,16 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
                         temp_x = margin_x + indent_w
                         lines_needed += 1
                     temp_x += cw
-            lines_needed += 1 # 包含第一行
+            lines_needed += 1 
             
             estimated_point_height = (lines_needed * line_height) + int(20 * font_scale)
             
-            # 如果加上這個重點會撞到底部，強制開新頁
             if current_y + estimated_point_height > page_bottom_limit:
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
                 current_y = top_margin_subsequent
 
-            # 真正開始畫這個重點 (雙色小標)
             current_x = margin_x
             for index, part in enumerate(parts):
                 color = accent_hex if index % 2 == 1 else "#EAEAEA"
@@ -300,16 +293,13 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             
             current_y += line_height + int(20 * font_scale) 
 
-    # 結算最後一頁
     pages.append(current_canvas)
 
-    # --- 加上頁碼 (1/2, 2/2) ---
     if len(pages) > 1:
         for idx, page in enumerate(pages):
             d = ImageDraw.Draw(page)
             indicator = f"{idx + 1} / {len(pages)}"
             tw, _ = get_text_size(indicator, font_page)
-            # 畫在正下方置中
             d.text(((w - tw) // 2, h - int(100 * font_scale)), indicator, font=font_page, fill="#777777")
 
     return pages
@@ -327,8 +317,9 @@ if st.button("🖼️ 生成滿版高品質畫布"):
     else:
         with st.spinner('正在渲染多圖輪播畫布...'):
             try:
+                # 🟢 修正：更精準的 Regex 擷取，不再因為 PAGE_BREAK 被誤傷
                 def extract(text, tag):
-                    pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=(\n[\*]{{2,3}}|$))"
+                    pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=\n\s*[\*]{{2,3}}\s*(?:TITLE|INSIGHT|POINTS)|$)"
                     match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
                     return match.group(1).strip().lstrip(':').lstrip('：').strip() if match else ""
 
@@ -340,11 +331,13 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                 h_title = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', t)
                 h_insight = i.replace("**", "") 
                 h_points = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', p).replace('\n', '<br>')
+                
+                # 預覽畫面中過濾掉換頁標籤
+                h_points_display = re.split(r'\*+PAGE_BREAK\*+', h_points, flags=re.IGNORECASE)[0]
 
                 img_b64 = get_image_base64_cached(uploaded_file.getvalue())
                 
                 if img_b64:
-                    # HTML 預覽 (僅顯示首頁概念)
                     st.caption("👁️ 網頁樣式預覽 (僅顯示首頁排版)")
                     st.markdown(f"""
                     <div id="capture-area">
@@ -352,20 +345,18 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                         <div class="card-text-overlay">
                             <div class="canvas-title">{h_title}</div>
                             <div class="canvas-insight">{h_insight}</div>
-                            <div class="canvas-points">{h_points.split('***PAGE_BREAK***')[0]}</div>
+                            <div class="canvas-points">{h_points_display}</div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     st.markdown("---")
                     
-                    # 🟢 產生真正的多圖清單
                     final_images = generate_carousel_images(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
                     
                     st.success(f"✅ 成功生成 {len(final_images)} 張輪播圖卡！")
                     st.info("📱 **手機用戶請直接對下方每張圖片「長按」並選擇「儲存圖片」。**")
                     
-                    # 🟢 動態並排顯示多張圖片與獨立下載按鈕
                     cols = st.columns(len(final_images))
                     for idx, (col, img) in enumerate(zip(cols, final_images)):
                         with col:
