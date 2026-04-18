@@ -1,7 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
 import re
-import base64
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import io
 import time
@@ -33,21 +32,6 @@ def find_working_model():
 
 model = find_working_model()
 
-@st.cache_data
-def get_image_base64_cached(bytes_data):
-    if bytes_data is not None:
-        try:
-            img = Image.open(io.BytesIO(bytes_data))
-            img = ImageOps.exif_transpose(img) 
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG")
-            return base64.b64encode(buf.getvalue()).decode()
-        except Exception:
-            return None
-    return None
-
 # 🟢 讀取本地中文字體
 @st.cache_resource
 def get_chinese_font(size):
@@ -62,23 +46,16 @@ def get_chinese_font(size):
 # 2. 視覺美學 CSS
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
-def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, font_scale):
-    guide_style = "border: 2px dashed rgba(255, 0, 0, 0.6);" if show_guides else "border: none;"
-    
+def inject_ui_css(accent_color):
     st.markdown(f"""
         <style>
         .stApp {{ background-color: #000000; }}
         [data-testid="stSidebar"] {{ background-color: #111111; border-right: 1px solid #333333; }}
         h1, h2, h3, p, span, label {{ color: #EAEAEA !important; font-family: 'PingFang TC', sans-serif; }}
-        .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; border: none; padding: 0.8rem 2rem; width: 100%; font-weight: bold; }}
-        #capture-area {{ width: 100%; max-width: 480px; margin: 0 auto; aspect-ratio: {aspect_ratio_css}; position: relative; overflow: hidden; display: block; background-color: #000; }}
-        .card-bg-image {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }}
-        .card-text-overlay {{ position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.6) 60%, rgba(0,0,0,0.2) 100%); padding: {safe_padding} 60px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; text-align: left; color: #FFFFFF; {guide_style} }}
-        .canvas-title {{ font-size: {2.2 * font_scale}rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
-        .canvas-title strong {{ color: {accent_color}; }}
-        .canvas-insight {{ font-size: {1.05 * font_scale}rem; margin-bottom: 30px; color: #BBBBBB; border-left: 5px solid {accent_color}; padding-left: 20px; font-weight: 400; font-style: italic; line-height: 1.6; }}
-        .canvas-points {{ font-size: {1.05 * font_scale}rem; line-height: 1.9; color: #CCCCCC; }}
-        .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: {1.05 * font_scale}rem; }}
+        .stButton>button {{ 
+            background-color: {accent_color}; color: white; border-radius: 8px; border: none; 
+            padding: 0.8rem 2rem; width: 100%; font-weight: bold; 
+        }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -86,9 +63,7 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, fon
 with st.sidebar:
     st.header("📐 畫布規格設定")
     post_type = st.radio("貼文類型", ["限時動態 (Stories)", "輪播貼文 (Carousel)"])
-    show_guides = st.checkbox("顯示 250px 安全邊界導引線", value=False)
-    aspect_ratio_css = "9 / 16" if post_type == "限時動態 (Stories)" else "4 / 5"
-    safe_padding = "23.1%" 
+    
     st.markdown("---")
     st.header("✍️ 內容模式")
     mode = st.radio("生成模式", ["AI 智能生成焦點", "直接貼上草稿"])
@@ -98,7 +73,7 @@ with st.sidebar:
         keywords = st.text_input("關鍵字 (可留空)", "")
     else:
         manual_raw = st.text_area("🔴 貼入原始內容：", height=150)
-        st.caption("提示：若想手動換頁，請在行首獨立輸入 `***PAGE_BREAK***`")
+        st.caption("📱 **手機換頁技巧**：若想手動換頁，請在行首獨立輸入三個減號 `---`")
 
     word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     tone = st.select_slider("語氣調性", options=["溫柔感性", "中性專業", "理性銳利"])
@@ -108,22 +83,23 @@ with st.sidebar:
     font_scale = st.slider("🔠 字體縮放比例", min_value=0.8, max_value=1.5, value=1.0, step=0.05)
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
     
-    inject_ui_css(accent_color, aspect_ratio_css, safe_padding, show_guides, font_scale) 
+    inject_ui_css(accent_color) 
 
     uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
-    img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
+    img_opacity = st.slider("底圖透明度", 0.0, 1.0, 0.75, step=0.05)
 
 # 4. 生成引擎
 st.header("Step 1. 文案處理")
 if st.button("✨ 執行文案處理"):
     try:
+        # 🟢 強化的 AI 自動分頁指令
         format_rule = """
         【格式死指令】：
         1. 標籤：***TITLE***, ***INSIGHT***, ***POINTS***。
         2. ***INSIGHT*** 段落字數絕對不可超過 50 字。
         3. ***POINTS*** 格式：『* **小標**：內容描述』。
         4. 除小標外，內文嚴禁標色。
-        5. 【重要】若內容超過 4 個重點或資訊量較大，請務必在合適的段落之間插入 `***PAGE_BREAK***` 標籤以進行分頁。
+        5. 【AI 自動分頁】：若重點超過 4 個，請務必在段落之間插入獨立一行的 `---` 來進行分頁。每一頁保持 3 到 4 個重點為佳。
         """
         if mode == "AI 智能生成焦點":
             if category == "全球當日總經整理":
@@ -138,14 +114,14 @@ if st.button("✨ 執行文案處理"):
         else:
             prompt = f"優化以下草稿。{format_rule} 字數：{word_count}。\n草稿：{manual_raw}"
         
-        with st.spinner('AI 分析數據中...'):
+        with st.spinner('AI 正在思考排版與分頁...'):
             response = model.generate_content(prompt)
             st.session_state['generated_draft'] = response.text
-            st.success("文案處理完畢！")
+            st.success("文案處理完畢！已為您自動安排最佳分頁。")
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 智慧多圖輪播引擎
+# 🟢 智慧多圖輪播引擎 (支援 `---` 與自動溢出保護)
 def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
@@ -247,8 +223,8 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         for line in p.split('\n'):
             if not line.strip(): continue
             
-            # 🟢 修正：更寬容的換頁偵測
-            if 'PAGE_BREAK' in line.upper():
+            # 🟢 判斷是否需要換頁：支援 AI 的 --- 或是舊的 PAGE_BREAK
+            if line.strip().startswith('---') or 'PAGE_BREAK' in line.upper():
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
@@ -274,6 +250,7 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             
             estimated_point_height = (lines_needed * line_height) + int(20 * font_scale)
             
+            # 高度防禦保護：如果這個重點畫不下了，系統自動切下一頁！
             if current_y + estimated_point_height > page_bottom_limit:
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
@@ -306,10 +283,10 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
 
 # 5. 渲染引擎
 st.markdown("---")
-st.header("Step 2. 合成畫布")
+st.header("Step 2. 合成與下載")
 final_text = st.text_area("編輯區", value=st.session_state['generated_draft'], height=300)
 
-if st.button("🖼️ 生成滿版高品質畫布"):
+if st.button("🖼️ 生成高品質圖卡"):
     if uploaded_file is None:
         st.warning("請先上傳圖片。")
     elif not final_text:
@@ -317,7 +294,6 @@ if st.button("🖼️ 生成滿版高品質畫布"):
     else:
         with st.spinner('正在渲染多圖輪播畫布...'):
             try:
-                # 🟢 修正：更精準的 Regex 擷取，不再因為 PAGE_BREAK 被誤傷
                 def extract(text, tag):
                     pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=\n\s*[\*]{{2,3}}\s*(?:TITLE|INSIGHT|POINTS)|$)"
                     match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
@@ -328,50 +304,26 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                     t_match = re.search(r"^\*\*(.*?)\*\*", final_text)
                     if t_match: t = t_match.group(1)
 
-                h_title = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', t)
-                h_insight = i.replace("**", "") 
-                h_points = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', p).replace('\n', '<br>')
+                final_images = generate_carousel_images(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
                 
-                # 預覽畫面中過濾掉換頁標籤
-                h_points_display = re.split(r'\*+PAGE_BREAK\*+', h_points, flags=re.IGNORECASE)[0]
-
-                img_b64 = get_image_base64_cached(uploaded_file.getvalue())
+                st.success(f"✅ 成功生成 {len(final_images)} 張圖卡！")
+                st.info("📱 **手機用戶請直接對下方每張圖片「長按」並選擇「儲存圖片」。**")
                 
-                if img_b64:
-                    st.caption("👁️ 網頁樣式預覽 (僅顯示首頁排版)")
-                    st.markdown(f"""
-                    <div id="capture-area">
-                        <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
-                        <div class="card-text-overlay">
-                            <div class="canvas-title">{h_title}</div>
-                            <div class="canvas-insight">{h_insight}</div>
-                            <div class="canvas-points">{h_points_display}</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    st.markdown("---")
-                    
-                    final_images = generate_carousel_images(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
-                    
-                    st.success(f"✅ 成功生成 {len(final_images)} 張輪播圖卡！")
-                    st.info("📱 **手機用戶請直接對下方每張圖片「長按」並選擇「儲存圖片」。**")
-                    
-                    cols = st.columns(len(final_images))
-                    for idx, (col, img) in enumerate(zip(cols, final_images)):
-                        with col:
-                            st.image(img, use_container_width=True)
-                            buf = io.BytesIO()
-                            img.save(buf, format="PNG")
-                            st.download_button(
-                                label=f"📸 下載 圖 {idx+1}",
-                                data=buf.getvalue(),
-                                file_name=f"IG_Card_p{idx+1}_{int(time.time())}.png",
-                                mime="image/png",
-                                use_container_width=True,
-                                key=f"dl_btn_{idx}"
-                            )
-                    st.balloons()
+                cols = st.columns(len(final_images))
+                for idx, (col, img) in enumerate(zip(cols, final_images)):
+                    with col:
+                        st.image(img, use_container_width=True)
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        st.download_button(
+                            label=f"📸 下載 圖 {idx+1}",
+                            data=buf.getvalue(),
+                            file_name=f"IG_Card_p{idx+1}_{int(time.time())}.png",
+                            mime="image/png",
+                            use_container_width=True,
+                            key=f"dl_btn_{idx}"
+                        )
+                st.balloons()
 
             except Exception as e:
                 st.error(f"渲染失敗：{e}")
