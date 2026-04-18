@@ -33,7 +33,6 @@ def find_working_model():
 
 model = find_working_model()
 
-# 🟢 修正手機上傳 EXIF 翻轉問題 (確保預覽不會歪掉)
 @st.cache_data
 def get_image_base64_cached(bytes_data):
     if bytes_data is not None:
@@ -49,7 +48,7 @@ def get_image_base64_cached(bytes_data):
             return None
     return None
 
-# 🟢 讀取本地中文字體
+# 🟢 讀取本地中文字體 (保持第一版最穩定的做法)
 @st.cache_resource
 def get_chinese_font(size):
     try:
@@ -99,6 +98,7 @@ with st.sidebar:
         keywords = st.text_input("關鍵字 (可留空)", "")
     else:
         manual_raw = st.text_area("🔴 貼入原始內容：", height=150)
+        st.caption("提示：若想手動換頁，請在行首獨立輸入 `***PAGE_BREAK***`")
 
     word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     tone = st.select_slider("語氣調性", options=["溫柔感性", "中性專業", "理性銳利"])
@@ -123,6 +123,7 @@ if st.button("✨ 執行文案處理"):
         2. ***INSIGHT*** 段落字數絕對不可超過 50 字。
         3. ***POINTS*** 格式：『* **小標**：內容描述』。
         4. 除小標外，內文嚴禁標色。
+        5. 【重要】若內容超過 4 個重點或資訊量較大，請務必在合適的段落之間插入 `***PAGE_BREAK***` 標籤以進行分頁。
         """
         if mode == "AI 智能生成焦點":
             if category == "全球當日總經整理":
@@ -144,14 +145,14 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 Python 壓圖機
-def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
+# 🟢 智慧多圖輪播引擎 (支援 A:標籤換頁 + B:高度溢出自動換頁)
+def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
+    # 處理底圖 (所有頁面共用)
     img = Image.open(io.BytesIO(base_img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGBA")
-    
     img_w, img_h = img.size
     target_ratio = w / h
     if (img_w / img_h) > target_ratio:
@@ -162,9 +163,9 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
         img = img.crop((0, (img_h - new_h) // 2, img_w, (img_h + new_h) // 2))
     img = img.resize((w, h), Image.Resampling.LANCZOS)
 
-    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    base_canvas = Image.new("RGBA", (w, h), (0, 0, 0, 255))
     img.putalpha(int(255 * opacity))
-    canvas.paste(img, (0, 0), img)
+    base_canvas.paste(img, (0, 0), img)
 
     gradient = Image.new('RGBA', (w, h))
     draw_grad = ImageDraw.Draw(gradient)
@@ -175,17 +176,17 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
         else:
             alpha_pct = 0.6 - ((0.6 - 0.2) * ((p_ratio - 0.6) / 0.4))
         draw_grad.line([(x, 0), (x, h)], fill=(0, 0, 0, int(255 * alpha_pct)))
-    canvas = Image.alpha_composite(canvas, gradient)
+    base_canvas = Image.alpha_composite(base_canvas, gradient)
 
-    draw = ImageDraw.Draw(canvas)
+    # 字體設定
     font_title = get_chinese_font(72 * font_scale)    
     font_insight = get_chinese_font(34 * font_scale)  
     font_points = get_chinese_font(36 * font_scale)   
+    font_page = get_chinese_font(28 * font_scale) # 頁碼字體
 
     margin_x = 80
     max_text_width = w - (margin_x * 2) - 40 
-    current_y = int(h * 0.231) 
-
+    
     def get_text_size(text, font):
         try:
             if hasattr(font, 'getbbox'):
@@ -194,7 +195,7 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
         except: pass
         return len(text) * font.size, font.size
 
-    def process_text(text, font, fill, max_w, start_x, start_y, line_height_mult=1.5, draw_mode=True):
+    def process_text(draw_obj, text, font, fill, max_w, start_x, start_y, line_height_mult=1.5, draw_mode=True):
         if not text or not text.strip(): return start_y
         lines = []
         for paragraph in text.split('\n'):
@@ -214,23 +215,33 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
         
         for l in lines:
             if draw_mode:
-                draw.text((start_x, y), l, font=font, fill=fill)
+                draw_obj.text((start_x, y), l, font=font, fill=fill)
             y += int(th * line_height_mult)
         return y
 
+    pages = []
+    current_canvas = base_canvas.copy()
+    draw = ImageDraw.Draw(current_canvas)
+    
+    current_y = int(h * 0.231) 
+    page_bottom_limit = h - int(150 * font_scale) # 底部保留 150px 空間
+    top_margin_subsequent = int(h * 0.15) # 第2頁之後，文字從 15% 的高度開始
+
+    # --- 第 1 頁：畫標題與前言 ---
     if t.strip():
-        current_y = process_text(t, font_title, "white", max_text_width, margin_x, current_y, 1.3)
+        current_y = process_text(draw, t, font_title, "white", max_text_width, margin_x, current_y, 1.3)
         current_y += int(45 * font_scale)
 
     if i.strip():
         insight_x = margin_x + 30 
         insight_max_w = max_text_width - 30
-        predicted_end_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6, draw_mode=False)
+        predicted_end_y = process_text(draw, i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6, draw_mode=False)
         box_height = max(predicted_end_y - current_y, 30) 
         draw.rectangle([margin_x, current_y + 8, margin_x + 6, current_y + box_height - 15], fill=accent_hex)
-        current_y = process_text(i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
+        current_y = process_text(draw, i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
         current_y += int(50 * font_scale)
 
+    # --- 畫重點 (支援智能與自動分頁) ---
     if p.strip():
         _, th_p = get_text_size("國", font_points)
         th_p = max(th_p, 30)
@@ -239,14 +250,44 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
 
         for line in p.split('\n'):
             if not line.strip(): continue
+            
+            # 【作法 A】遇到 AI 或手動輸入的換頁標籤
+            if '***PAGE_BREAK***' in line.upper():
+                pages.append(current_canvas) # 儲存當前頁
+                current_canvas = base_canvas.copy() # 開新畫布
+                draw = ImageDraw.Draw(current_canvas)
+                current_y = top_margin_subsequent # 新一頁從上方開始
+                continue
+
             clean_line = line.strip()
             if clean_line.startswith('* '): clean_line = '• ' + clean_line[2:]
             elif not clean_line.startswith('•') and not clean_line.startswith('-'):
                 clean_line = "• " + clean_line
             
+            # 【作法 B】空間預先測量 (自動分頁防禦)
+            temp_x = margin_x
+            lines_needed = 0
             parts = clean_line.split('**')
-            current_x = margin_x
+            for part in parts:
+                for char in part:
+                    cw, _ = get_text_size(char, font_points)
+                    if temp_x + cw > margin_x + max_text_width:
+                        temp_x = margin_x + indent_w
+                        lines_needed += 1
+                    temp_x += cw
+            lines_needed += 1 # 包含第一行
             
+            estimated_point_height = (lines_needed * line_height) + int(20 * font_scale)
+            
+            # 如果加上這個重點會撞到底部，強制開新頁
+            if current_y + estimated_point_height > page_bottom_limit:
+                pages.append(current_canvas)
+                current_canvas = base_canvas.copy()
+                draw = ImageDraw.Draw(current_canvas)
+                current_y = top_margin_subsequent
+
+            # 真正開始畫這個重點 (雙色小標)
+            current_x = margin_x
             for index, part in enumerate(parts):
                 color = accent_hex if index % 2 == 1 else "#EAEAEA"
                 for char in part:
@@ -259,7 +300,19 @@ def generate_fixed_image(base_img_bytes, t, i, p, ratio_type, accent_hex, opacit
             
             current_y += line_height + int(20 * font_scale) 
 
-    return canvas
+    # 結算最後一頁
+    pages.append(current_canvas)
+
+    # --- 加上頁碼 (1/2, 2/2) ---
+    if len(pages) > 1:
+        for idx, page in enumerate(pages):
+            d = ImageDraw.Draw(page)
+            indicator = f"{idx + 1} / {len(pages)}"
+            tw, _ = get_text_size(indicator, font_page)
+            # 畫在正下方置中
+            d.text(((w - tw) // 2, h - int(100 * font_scale)), indicator, font=font_page, fill="#777777")
+
+    return pages
 
 # 5. 渲染引擎
 st.markdown("---")
@@ -272,7 +325,7 @@ if st.button("🖼️ 生成滿版高品質畫布"):
     elif not final_text:
         st.warning("無內容。")
     else:
-        with st.spinner('正在渲染畫布與生成圖片...'):
+        with st.spinner('正在渲染多圖輪播畫布...'):
             try:
                 def extract(text, tag):
                     pattern = rf"[\*]{{2,3}}{tag}[\*]{{2,3}}[:：\s]*(.*?)(?=(\n[\*]{{2,3}}|$))"
@@ -288,27 +341,46 @@ if st.button("🖼️ 生成滿版高品質畫布"):
                 h_insight = i.replace("**", "") 
                 h_points = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', p).replace('\n', '<br>')
 
-                # 🟢 產生最終真正的圖片檔案
-                final_img = generate_fixed_image(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
+                img_b64 = get_image_base64_cached(uploaded_file.getvalue())
                 
-                # 🟢 直接在網頁上印出「真正的」圖片 (支援手機原生長按儲存)
-                st.success("✅ 圖片生成成功！")
-                st.info("📱 **手機用戶請注意：如果你是從 LINE 或 FB 點開，請直接對下方圖片「長按」並選擇「儲存圖片」即可！**")
-                
-                st.image(final_img, caption="長按上方圖片儲存", use_container_width=True)
-                
-                # 準備下載用的檔案 (給電腦端用戶)
-                buf = io.BytesIO()
-                final_img.save(buf, format="PNG")
-                
-                st.download_button(
-                    label="💻 電腦端點擊下載：高品質圖卡 (PNG)",
-                    data=buf.getvalue(),
-                    file_name=f"IG_Card_{int(time.time())}.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
-                st.balloons()
+                if img_b64:
+                    # HTML 預覽 (僅顯示首頁概念)
+                    st.caption("👁️ 網頁樣式預覽 (僅顯示首頁排版)")
+                    st.markdown(f"""
+                    <div id="capture-area">
+                        <img src="data:image/jpeg;base64,{img_b64}" class="card-bg-image" style="opacity: {img_opacity};">
+                        <div class="card-text-overlay">
+                            <div class="canvas-title">{h_title}</div>
+                            <div class="canvas-insight">{h_insight}</div>
+                            <div class="canvas-points">{h_points.split('***PAGE_BREAK***')[0]}</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    
+                    # 🟢 產生真正的多圖清單
+                    final_images = generate_carousel_images(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
+                    
+                    st.success(f"✅ 成功生成 {len(final_images)} 張輪播圖卡！")
+                    st.info("📱 **手機用戶請直接對下方每張圖片「長按」並選擇「儲存圖片」。**")
+                    
+                    # 🟢 動態並排顯示多張圖片與獨立下載按鈕
+                    cols = st.columns(len(final_images))
+                    for idx, (col, img) in enumerate(zip(cols, final_images)):
+                        with col:
+                            st.image(img, use_container_width=True)
+                            buf = io.BytesIO()
+                            img.save(buf, format="PNG")
+                            st.download_button(
+                                label=f"📸 下載 圖 {idx+1}",
+                                data=buf.getvalue(),
+                                file_name=f"IG_Card_p{idx+1}_{int(time.time())}.png",
+                                mime="image/png",
+                                use_container_width=True,
+                                key=f"dl_btn_{idx}"
+                            )
+                    st.balloons()
 
             except Exception as e:
                 st.error(f"渲染失敗：{e}")
