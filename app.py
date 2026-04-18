@@ -72,11 +72,6 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, font_scale):
         #capture-area {{ width: 100%; max-width: 480px; margin: 0 auto; aspect-ratio: {aspect_ratio_css}; position: relative; overflow: hidden; display: block; background-color: #000; }}
         .card-bg-image {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }}
         .card-text-overlay {{ position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.6) 60%, rgba(0,0,0,0.2) 100%); padding: {safe_padding} 60px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; text-align: left; color: #FFFFFF; }}
-        .canvas-title {{ font-size: {2.2 * font_scale}rem; font-weight: bold; margin-bottom: 25px; line-height: 1.2; color: #FFFFFF; }}
-        .canvas-title strong {{ color: {accent_color}; }}
-        .canvas-insight {{ font-size: {1.05 * font_scale}rem; margin-bottom: 30px; color: #BBBBBB; border-left: 5px solid {accent_color}; padding-left: 20px; font-weight: 400; font-style: italic; line-height: 1.6; }}
-        .canvas-points {{ font-size: {1.05 * font_scale}rem; line-height: 1.9; color: #CCCCCC; }}
-        .canvas-points strong {{ color: {accent_color}; font-weight: bold; font-size: {1.05 * font_scale}rem; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -96,7 +91,7 @@ with st.sidebar:
         keywords = st.text_input("關鍵字 (可留空)", "")
         word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     else:
-        # 🟢 在「直接貼上草稿」模式下：隱藏字數，新增分頁選擇
+        # 🟢 草稿模式：隱藏預期總字數，保留分頁選項
         manual_raw = st.text_area("🔴 貼入原始草稿：", height=200)
         draft_pagination_mode = st.radio("📜 分頁處理方式", [
             "🧠 AI 幫我自動分頁", 
@@ -135,7 +130,6 @@ if st.button("✨ 執行文案處理"):
             pagination_rule = "5. 【分頁規定】：若重點超過 4 個，請務必在合適的段落之間插入獨立一行的 `---` 標籤來分頁。"
             prompt = f"角色：{persona}。主題：{topic}。{instruction} {format_base} {pagination_rule} 字數大約：{word_count}。"
         else:
-            # 🟢 依據使用者的分頁選擇，給予 AI 不同的指令
             if "手動分頁" in draft_pagination_mode:
                 pagination_rule = "5. 【分頁規定】：使用者草稿中已自行設定了 `---` 或 `***PAGE_BREAK***` 作為換頁標記。請你在優化排版時，【絕對保留】這些標記的位置，不要擅自增加或刪除換頁。"
             else:
@@ -150,7 +144,7 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 第一版核心：無腦穩定繪圖引擎 (支援多圖與長按存圖)
+# 🟢 第一版核心：無腦穩定繪圖引擎 (支援每頁固定標題)
 def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
@@ -215,33 +209,36 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         y = start_y
         _, th = get_text_size("國", font)
         th = max(th, 30)
-        
         for l in lines:
             if draw_mode:
                 draw_obj.text((start_x, y), l, font=font, fill=fill)
             y += int(th * line_height_mult)
         return y
 
+    # 🟢 抽出「頁首印章」函數：每當開新畫布就執行一次
+    def draw_header(draw_obj):
+        y = int(h * 0.231)
+        if t.strip():
+            y = process_text(draw_obj, t, font_title, "white", max_text_width, margin_x, y, 1.3)
+            y += int(45 * font_scale)
+
+        if i.strip():
+            insight_x = margin_x + 30 
+            insight_max_w = max_text_width - 30
+            predicted_end_y = process_text(draw_obj, i, font_insight, "#BBBBBB", insight_max_w, insight_x, y, 1.6, draw_mode=False)
+            box_height = max(predicted_end_y - y, 30) 
+            draw_obj.rectangle([margin_x, y + 8, margin_x + 6, y + box_height - 15], fill=accent_hex)
+            y = process_text(draw_obj, i, font_insight, "#BBBBBB", insight_max_w, insight_x, y, 1.6)
+            y += int(50 * font_scale)
+        return y # 回傳畫完標題後的 Y 座標，讓 Points 知道從哪裡開始接續
+
     pages = []
+    
+    # 建立第一頁並蓋上頁首
     current_canvas = base_canvas.copy()
     draw = ImageDraw.Draw(current_canvas)
-    
-    current_y = int(h * 0.231) 
+    current_y = draw_header(draw) 
     page_bottom_limit = h - int(150 * font_scale) 
-    top_margin_subsequent = int(h * 0.15) 
-
-    if t.strip():
-        current_y = process_text(draw, t, font_title, "white", max_text_width, margin_x, current_y, 1.3)
-        current_y += int(45 * font_scale)
-
-    if i.strip():
-        insight_x = margin_x + 30 
-        insight_max_w = max_text_width - 30
-        predicted_end_y = process_text(draw, i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6, draw_mode=False)
-        box_height = max(predicted_end_y - current_y, 30) 
-        draw.rectangle([margin_x, current_y + 8, margin_x + 6, current_y + box_height - 15], fill=accent_hex)
-        current_y = process_text(draw, i, font_insight, "#BBBBBB", insight_max_w, insight_x, current_y, 1.6)
-        current_y += int(50 * font_scale)
 
     if p.strip():
         _, th_p = get_text_size("國", font_points)
@@ -252,12 +249,12 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         for line in p.split('\n'):
             if not line.strip(): continue
             
-            # 🟢 分頁判定點：支援 --- 以及 PAGE_BREAK
+            # 🟢 換頁時，把舊畫布存起來，開新畫布並再次蓋上「頁首印章」
             if line.strip().startswith('---') or 'PAGE_BREAK' in line.upper():
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
-                current_y = top_margin_subsequent 
+                current_y = draw_header(draw) 
                 continue
 
             clean_line = line.strip()
@@ -279,11 +276,12 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             
             estimated_point_height = (lines_needed * line_height) + int(20 * font_scale)
             
+            # 高度溢出換頁時，同樣蓋上頁首印章
             if current_y + estimated_point_height > page_bottom_limit:
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
-                current_y = top_margin_subsequent
+                current_y = draw_header(draw)
 
             current_x = margin_x
             for index, part in enumerate(parts):
