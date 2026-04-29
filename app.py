@@ -32,7 +32,7 @@ def find_working_model():
 
 model = find_working_model()
 
-# 🟢 修正手機上傳 EXIF 翻轉問題 (第一版核心穩定功能)
+# 🟢 修正手機上傳 EXIF 翻轉問題
 @st.cache_data
 def get_image_base64_cached(bytes_data):
     if bytes_data is not None:
@@ -43,6 +43,7 @@ def get_image_base64_cached(bytes_data):
                 img = img.convert('RGB')
             buf = io.BytesIO()
             img.save(buf, format="JPEG")
+            import base64
             return base64.b64encode(buf.getvalue()).decode()
         except Exception:
             return None
@@ -62,16 +63,13 @@ def get_chinese_font(size):
 # 2. 視覺美學 CSS
 st.set_page_config(page_title="質感圖文合成器 Pro+", layout="wide")
 
-def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, font_scale):
+def inject_ui_css(accent_color):
     st.markdown(f"""
         <style>
         .stApp {{ background-color: #000000; }}
         [data-testid="stSidebar"] {{ background-color: #111111; border-right: 1px solid #333333; }}
         h1, h2, h3, p, span, label {{ color: #EAEAEA !important; font-family: 'PingFang TC', sans-serif; }}
         .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; border: none; padding: 0.8rem 2rem; width: 100%; font-weight: bold; }}
-        #capture-area {{ width: 100%; max-width: 480px; margin: 0 auto; aspect-ratio: {aspect_ratio_css}; position: relative; overflow: hidden; display: block; background-color: #000; }}
-        .card-bg-image {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }}
-        .card-text-overlay {{ position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.6) 60%, rgba(0,0,0,0.2) 100%); padding: {safe_padding} 60px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; text-align: left; color: #FFFFFF; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -79,8 +77,6 @@ def inject_ui_css(accent_color, aspect_ratio_css, safe_padding, font_scale):
 with st.sidebar:
     st.header("📐 畫布規格設定")
     post_type = st.radio("貼文類型", ["限時動態 (Stories)", "輪播貼文 (Carousel)"])
-    aspect_ratio_css = "9 / 16" if post_type == "限時動態 (Stories)" else "4 / 5"
-    safe_padding = "23.1%" 
     
     st.markdown("---")
     st.header("✍️ 內容模式")
@@ -91,7 +87,6 @@ with st.sidebar:
         keywords = st.text_input("關鍵字 (可留空)", "")
         word_count = st.number_input("預期總字數", min_value=50, max_value=900, value=250)
     else:
-        # 🟢 草稿模式：隱藏預期總字數，保留分頁選項
         manual_raw = st.text_area("🔴 貼入原始草稿：", height=200)
         draft_pagination_mode = st.radio("📜 分頁處理方式", [
             "🧠 AI 幫我自動分頁", 
@@ -106,10 +101,16 @@ with st.sidebar:
     font_scale = st.slider("🔠 字體縮放比例", min_value=0.8, max_value=1.5, value=1.0, step=0.05)
     accent_color = st.color_picker("重點裝飾色", "#A9B388")
     
-    inject_ui_css(accent_color, aspect_ratio_css, safe_padding, font_scale) 
+    inject_ui_css(accent_color) 
 
-    uploaded_file = st.file_uploader("上傳底圖", type=["jpg", "jpeg", "png"])
-    img_opacity = st.slider("底圖預覽透明度", 0.0, 1.0, 0.75, step=0.05)
+    st.header("🖼️ 背景底圖")
+    bg_file = st.file_uploader("上傳全螢幕背景底圖", type=["jpg", "jpeg", "png"])
+    img_opacity = st.slider("背景底圖透明度", 0.0, 1.0, 0.75, step=0.05)
+
+    # 🟢 新增內容圖片上傳
+    st.markdown("---")
+    st.header("🖼️ 內容插入圖片")
+    content_file = st.file_uploader("上傳內容圖 (插入標題與摘要之間)", type=["jpg", "jpeg", "png"])
 
 # 4. 生成引擎
 st.header("Step 1. 文案處理")
@@ -144,27 +145,29 @@ if st.button("✨ 執行文案處理"):
     except Exception as e:
         st.error(f"文案生成失敗，請確認 API Key 是否設定正確。")
 
-# 🟢 第一版核心：無腦穩定繪圖引擎 (支援每頁固定標題)
-def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
+# 🟢 核心繪圖引擎
+def generate_carousel_images(bg_img_bytes, content_img_bytes, t, i, p, ratio_type, accent_hex, opacity, font_scale):
     w = 1080
     h = 1920 if ratio_type == "限時動態 (Stories)" else 1350
 
-    img = Image.open(io.BytesIO(base_img_bytes))
-    img = ImageOps.exif_transpose(img).convert("RGBA")
-    img_w, img_h = img.size
+    # 處理背景
+    bg = Image.open(io.BytesIO(bg_img_bytes))
+    bg = ImageOps.exif_transpose(bg).convert("RGBA")
+    img_w, img_h = bg.size
     target_ratio = w / h
     if (img_w / img_h) > target_ratio:
         new_w = int(img_h * target_ratio)
-        img = img.crop(((img_w - new_w) // 2, 0, (img_w + new_w) // 2, img_h))
+        bg = bg.crop(((img_w - new_w) // 2, 0, (img_w + new_w) // 2, img_h))
     else:
         new_h = int(img_w / target_ratio)
-        img = img.crop((0, (img_h - new_h) // 2, img_w, (img_h + new_h) // 2))
-    img = img.resize((w, h), Image.Resampling.LANCZOS)
+        bg = bg.crop((0, (img_h - new_h) // 2, img_w, (img_h + new_h) // 2))
+    bg = bg.resize((w, h), Image.Resampling.LANCZOS)
 
     base_canvas = Image.new("RGBA", (w, h), (0, 0, 0, 255))
-    img.putalpha(int(255 * opacity))
-    base_canvas.paste(img, (0, 0), img)
+    bg.putalpha(int(255 * opacity))
+    base_canvas.paste(bg, (0, 0), bg)
 
+    # 漸層陰影
     gradient = Image.new('RGBA', (w, h))
     draw_grad = ImageDraw.Draw(gradient)
     for x in range(w):
@@ -183,7 +186,7 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
 
     margin_x = 80
     max_text_width = w - (margin_x * 2) - 40 
-    
+
     def get_text_size(text, font):
         try:
             if hasattr(font, 'getbbox'):
@@ -215,13 +218,37 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             y += int(th * line_height_mult)
         return y
 
-    # 🟢 抽出「頁首印章」函數：每當開新畫布就執行一次
-    def draw_header(draw_obj):
-        y = int(h * 0.231)
+    # 🟢 頁首繪製 (含內容圖片邏輯)
+    def draw_header(draw_obj, canvas_obj):
+        y = int(h * 0.2)
+        # 1. 大標題
         if t.strip():
             y = process_text(draw_obj, t, font_title, "white", max_text_width, margin_x, y, 1.3)
-            y += int(45 * font_scale)
+            y += int(35 * font_scale)
 
+        # 2. 內容圖片 (如果使用者有上傳)
+        if content_img_bytes:
+            c_img = Image.open(io.BytesIO(content_img_bytes)).convert("RGBA")
+            c_img = ImageOps.exif_transpose(c_img)
+            cw, ch = c_img.size
+            
+            # 計算縮放：寬度固定為 max_text_width
+            target_w = max_text_width
+            target_h = int(target_w * (ch / cw))
+            
+            # 高度保護：如果圖片太高，限制高度避免吃掉所有文字空間
+            max_c_h = int(h * 0.35) 
+            if target_h > max_c_h:
+                target_h = max_c_h
+                target_w = int(target_h * (cw / ch))
+            
+            c_img = c_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            
+            # 建立帶圓角的內容圖 (可選，這裡先採直角符合新聞感)
+            canvas_obj.paste(c_img, (margin_x, y), c_img)
+            y += target_h + int(40 * font_scale)
+
+        # 3. 摘要 (Insight)
         if i.strip():
             insight_x = margin_x + 30 
             insight_max_w = max_text_width - 30
@@ -230,14 +257,12 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             draw_obj.rectangle([margin_x, y + 8, margin_x + 6, y + box_height - 15], fill=accent_hex)
             y = process_text(draw_obj, i, font_insight, "#BBBBBB", insight_max_w, insight_x, y, 1.6)
             y += int(50 * font_scale)
-        return y # 回傳畫完標題後的 Y 座標，讓 Points 知道從哪裡開始接續
+        return y
 
     pages = []
-    
-    # 建立第一頁並蓋上頁首
     current_canvas = base_canvas.copy()
     draw = ImageDraw.Draw(current_canvas)
-    current_y = draw_header(draw) 
+    current_y = draw_header(draw, current_canvas) 
     page_bottom_limit = h - int(150 * font_scale) 
 
     if p.strip():
@@ -249,12 +274,11 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
         for line in p.split('\n'):
             if not line.strip(): continue
             
-            # 🟢 換頁時，把舊畫布存起來，開新畫布並再次蓋上「頁首印章」
             if line.strip().startswith('---') or 'PAGE_BREAK' in line.upper():
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
-                current_y = draw_header(draw) 
+                current_y = draw_header(draw, current_canvas) 
                 continue
 
             clean_line = line.strip()
@@ -276,12 +300,11 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
             
             estimated_point_height = (lines_needed * line_height) + int(20 * font_scale)
             
-            # 高度溢出換頁時，同樣蓋上頁首印章
             if current_y + estimated_point_height > page_bottom_limit:
                 pages.append(current_canvas)
                 current_canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(current_canvas)
-                current_y = draw_header(draw)
+                current_y = draw_header(draw, current_canvas)
 
             current_x = margin_x
             for index, part in enumerate(parts):
@@ -307,14 +330,14 @@ def generate_carousel_images(base_img_bytes, t, i, p, ratio_type, accent_hex, op
 
     return pages
 
-# 5. 渲染引擎
+# 5. 渲染與輸出
 st.markdown("---")
 st.header("Step 2. 合成與下載")
 final_text = st.text_area("編輯區", value=st.session_state['generated_draft'], height=300)
 
 if st.button("🖼️ 生成高品質圖卡"):
-    if uploaded_file is None:
-        st.warning("請先上傳圖片。")
+    if bg_file is None:
+        st.warning("請上傳背景底圖。")
     elif not final_text:
         st.warning("無內容。")
     else:
@@ -330,10 +353,12 @@ if st.button("🖼️ 生成高品質圖卡"):
                     t_match = re.search(r"^\*\*(.*?)\*\*", final_text)
                     if t_match: t = t_match.group(1)
 
-                final_images = generate_carousel_images(uploaded_file.getvalue(), t, i, p, post_type, accent_color, img_opacity, font_scale)
+                # 傳入背景圖與內容圖片
+                c_bytes = content_file.getvalue() if content_file else None
+                final_images = generate_carousel_images(bg_file.getvalue(), c_bytes, t, i, p, post_type, accent_color, img_opacity, font_scale)
                 
                 st.success(f"✅ 成功生成 {len(final_images)} 張圖卡！")
-                st.info("📱 **手機用戶請直接對下方每張圖片「長按」並選擇「儲存圖片」。**")
+                st.info("📱 **手機用戶請對下方圖片「長按」並選擇「儲存圖片」。**")
                 
                 cols = st.columns(len(final_images))
                 for idx, (col, img) in enumerate(zip(cols, final_images)):
